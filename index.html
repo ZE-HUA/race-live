@@ -67,7 +67,31 @@
   /* 記錄 */
   #recBtn { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; padding:9px 8px; font-size:13px;
     font-weight:700; border-radius:11px; background:#2c2c2c; }
-  #histBtn { padding:9px 10px; font-size:13px; border-radius:11px; background:#2c2c2c; }
+  #histBtn, #camBtn { padding:9px 10px; font-size:13px; border-radius:11px; background:#2c2c2c; }
+
+  /* 錄影（行車記錄器） */
+  #cam { position:fixed; inset:0; z-index:2600; background:#000; }
+  #cam.hidden { display:none; }
+  #camCanvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  #camTop { position:absolute; top:calc(env(safe-area-inset-top) + 10px); left:10px; right:10px; display:flex; gap:8px; align-items:center; }
+  #camTop .sp { flex:1; }
+  #camTop .btn, #camBar .btn { background:rgba(30,30,30,.75); font-size:14px; padding:9px 12px; }
+  #camTop .btn.on { background:var(--accent); color:#111; }
+  #camStatus { white-space:nowrap; color:#fff; font-size:13px; background:rgba(30,30,30,.75); padding:8px 12px; border-radius:999px; font-variant-numeric:tabular-nums; }
+  #camBar { position:absolute; left:0; right:0; bottom:calc(env(safe-area-inset-bottom) + 18px); display:flex; justify-content:center; align-items:center; gap:28px; }
+  #camRec { width:72px; height:72px; border-radius:50%; border:5px solid #fff; background:transparent; padding:0; display:flex; align-items:center; justify-content:center; }
+  #camRec i { display:block; width:52px; height:52px; border-radius:50%; background:#e53935; transition:all .2s; }
+  #camRec.on i { width:28px; height:28px; border-radius:6px; }
+  #camMsg { position:absolute; left:20px; right:20px; top:40%; text-align:center; color:#fff; font-size:15px; line-height:1.6; }
+  #camDone { position:absolute; inset:0; background:#111; display:flex; flex-direction:column; padding:calc(env(safe-area-inset-top) + 14px) 14px calc(env(safe-area-inset-bottom) + 14px); gap:10px; }
+  #camDone.hidden { display:none; }
+  #camDone video { flex:1; min-height:0; width:100%; background:#000; border-radius:12px; }
+  #camDone .acts { display:flex; gap:8px; }
+  #camDone .acts .bigbtn { flex:1; margin:0; }
+  #camDone .acts .btn { background:#2c2c2c; font-size:15px; padding:0 16px; border-radius:12px; }
+  @media (orientation: landscape) and (max-height: 600px) {
+    #camBar { left:auto; right:calc(env(safe-area-inset-right) + 18px); top:0; bottom:0; flex-direction:column; justify-content:center; gap:20px; }
+  }
   #recBtn.on-rec { background:#e53935; color:#fff; animation:pulse 1.6s infinite; }
   #recBtn.other { background:rgba(229,57,53,.22); color:#ff8a80; }
   @keyframes pulse { 50% { opacity:.72; } }
@@ -192,6 +216,7 @@
     <div class="spdbox"><span id="mySpeed">0</span><span class="unit">km/h</span></div>
     <button id="recBtn" class="btn">● 開始記錄</button>
     <button id="histBtn" class="btn">紀錄</button>
+    <button id="camBtn" class="btn" title="錄影">🎥</button>
     <button id="listToggle" title="顯示/隱藏排行"><div id="gpsInfo">等待 GPS</div><div id="countInfo"></div></button>
   </div>
 </div>
@@ -236,6 +261,28 @@
       <div class="acts"><button id="vidShare" class="bigbtn">儲存／分享</button><button id="vidDl" class="btn">下載</button></div>
       <p id="vidDoneText" class="hint"></p>
     </div>
+  </div>
+</div>
+<div id="cam" class="hidden">
+  <canvas id="camCanvas"></canvas>
+  <div id="camMsg"></div>
+  <div id="camTop">
+    <button id="camClose" class="btn">✕</button>
+    <span id="camStatus">準備中</span>
+    <span class="sp"></span>
+    <button id="camHud" class="btn on">疊加資訊</button>
+    <button id="camMic" class="btn">🔇 收音</button>
+  </div>
+  <div id="camBar">
+    <button id="camFlip" class="btn">🔄 鏡頭</button>
+    <button id="camRec" title="開始／停止錄影"><i></i></button>
+    <span style="width:74px"></span>
+  </div>
+  <div id="camDone" class="hidden">
+    <video id="camPreview" controls playsinline></video>
+    <div class="acts"><button id="camShare" class="bigbtn">儲存／分享</button><button id="camDl" class="btn">下載</button></div>
+    <div class="acts"><button id="camAgain" class="btn" style="flex:1;padding:12px">再錄一段</button><button id="camExit" class="btn" style="flex:1;padding:12px">回到地圖</button></div>
+    <p id="camDoneText" class="hint"></p>
   </div>
 </div>
 <div id="toast"></div>
@@ -1438,6 +1485,220 @@
     } finally { mr.stop(); await stopped; stream.getTracks().forEach(t => t.stop()); }
     const type = mr.mimeType || mime || 'video/webm';
     return { blob: new Blob(chunks, { type }), ext: type.includes('mp4') ? 'mp4' : 'webm' };
+  }
+
+  // =====================================================================
+  // 錄影（行車記錄器）：鏡頭畫面 + 即時疊加車速／時間／排行／雷達，直接錄成影片
+  // 畫在 canvas 上再錄 canvas，所以看到的就是錄下來的
+  // =====================================================================
+  const cam = { stream: null, video: null, facing: 'environment', hud: true, mic: false, rec: null, raf: 0, W: 1280, H: 720, out: null };
+  const camCv = $('camCanvas'), camG = camCv.getContext('2d');
+
+  $('camBtn').onclick = openCam;
+  async function openCam() {
+    $('cam').classList.remove('hidden'); $('camDone').classList.add('hidden');
+    $('camHud').classList.toggle('on', cam.hud);
+    $('camMic').textContent = cam.mic ? '🎙️ 收音' : '🔇 收音'; $('camMic').classList.toggle('on', cam.mic);
+    keepAwake();
+    await startCamStream();
+    cancelAnimationFrame(cam.raf);
+    const loop = () => { drawCam(); cam.raf = requestAnimationFrame(loop); };
+    cam.raf = requestAnimationFrame(loop);
+  }
+  async function startCamStream() {
+    stopCamStream();
+    $('camMsg').textContent = '開啟鏡頭中…'; $('camStatus').textContent = '準備中';
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('camMsg').textContent = '這個瀏覽器不能使用鏡頭'; return; }
+    try {
+      cam.stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: cam.facing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        audio: cam.mic ? { echoCancellation: false, noiseSuppression: true } : false,
+      });
+    } catch (e) {
+      $('camMsg').textContent = e.name === 'NotAllowedError'
+        ? '沒有鏡頭權限。請到手機的「設定 → Safari（或 Chrome）→ 相機／麥克風」允許，再重新打開。'
+        : '無法開啟鏡頭：' + (e.message || e.name);
+      return;
+    }
+    if (!cam.video) { cam.video = document.createElement('video'); cam.video.muted = true; cam.video.playsInline = true; cam.video.setAttribute('playsinline', ''); }
+    cam.video.srcObject = cam.stream;
+    try { await cam.video.play(); } catch {}
+    $('camMsg').textContent = '';
+    $('camStatus').textContent = '待機';
+  }
+  function stopCamStream() {
+    if (cam.stream) cam.stream.getTracks().forEach(t => t.stop());
+    cam.stream = null;
+  }
+  function closeCam() {
+    if (cam.rec) { if (!confirm('正在錄影，確定要停止並離開嗎？')) return; stopCamRec(true); }
+    cancelAnimationFrame(cam.raf); stopCamStream();
+    $('cam').classList.add('hidden');
+  }
+  $('camClose').onclick = closeCam;
+  $('camExit').onclick = () => { $('camDone').classList.add('hidden'); closeCam(); };
+  $('camAgain').onclick = () => { $('camDone').classList.add('hidden'); };
+  $('camHud').onclick = () => { cam.hud = !cam.hud; $('camHud').classList.toggle('on', cam.hud); };
+  $('camFlip').onclick = async () => {
+    if (cam.rec) { toast('錄影中不能切換鏡頭'); return; }
+    cam.facing = cam.facing === 'environment' ? 'user' : 'environment'; await startCamStream();
+  };
+  $('camMic').onclick = async () => {
+    if (cam.rec) { toast('錄影中不能切換收音'); return; }
+    cam.mic = !cam.mic; $('camMic').textContent = cam.mic ? '🎙️ 收音' : '🔇 收音'; $('camMic').classList.toggle('on', cam.mic);
+    await startCamStream();
+  };
+  $('camRec').onclick = () => cam.rec ? stopCamRec() : startCamRec();
+
+  function startCamRec() {
+    const v = cam.video;
+    if (!cam.stream || !v || !v.videoWidth) { toast('鏡頭還沒準備好'); return; }
+    if (!window.MediaRecorder || !camCv.captureStream) { toast('這個瀏覽器不支援錄影'); return; }
+    // 畫布尺寸依目前鏡頭方向決定（直拿 720×1280、橫拿 1280×720），錄影中固定不變
+    const land = v.videoWidth >= v.videoHeight;
+    cam.W = land ? 1280 : 720; cam.H = land ? 720 : 1280;
+    camCv.width = cam.W; camCv.height = cam.H;
+    drawCam();
+    const mime = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+      .find(m => MediaRecorder.isTypeSupported(m)) || '';
+    const out = camCv.captureStream(30);
+    if (cam.mic) cam.stream.getAudioTracks().forEach(t => out.addTrack(t));
+    const mr = new MediaRecorder(out, mime ? { mimeType: mime, videoBitsPerSecond: 4_000_000 } : undefined);
+    const chunks = []; let size = 0;
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) { chunks.push(e.data); size += e.data.size; } };
+    cam.rec = { mr, chunks, startedAt: Date.now(), mime: mr.mimeType || mime, sizeRef: () => size, out };
+    mr.onstop = () => finishCamRec();
+    mr.start(1000);
+    $('camRec').classList.add('on');
+    toast('開始錄影');
+  }
+  function stopCamRec(discard) {
+    if (!cam.rec) return;
+    cam.rec.discard = !!discard;
+    try { cam.rec.mr.stop(); } catch { finishCamRec(); }
+    $('camRec').classList.remove('on');
+  }
+  function finishCamRec() {
+    const r = cam.rec; cam.rec = null;
+    if (!r) return;
+    r.out.getVideoTracks().forEach(t => t.stop());
+    if (r.discard || !r.chunks.length) return;
+    const type = (r.mime || r.chunks[0].type || 'video/mp4').split(';')[0];
+    const blob = new Blob(r.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const name = `race-cam-${fmtFileDate(r.startedAt)}.${ext}`;
+    if (cam.out) URL.revokeObjectURL(cam.out.url);
+    cam.out = { blob, name, url: URL.createObjectURL(blob) };
+    $('camPreview').src = cam.out.url;
+    $('camDoneText').textContent = `${name}　${fmtDur(Date.now() - r.startedAt)}　${(blob.size / 1048576).toFixed(1)} MB。` +
+      'iPhone 按「儲存／分享」後選「儲存影片」就會存進相簿。這段影片只存在這個畫面，離開前記得儲存。';
+    $('camDone').classList.remove('hidden');
+  }
+  $('camShare').onclick = async () => {
+    if (!cam.out) return;
+    const file = new File([cam.out.blob], cam.out.name, { type: cam.out.blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: cam.out.name }); } catch (e) { if (e.name !== 'AbortError') downloadBlob(cam.out.name, cam.out.blob); }
+    } else downloadBlob(cam.out.name, cam.out.blob);
+  };
+  $('camDl').onclick = () => { if (cam.out) downloadBlob(cam.out.name, cam.out.blob); };
+
+  // --- 每一格：鏡頭畫面 + 疊加資訊 ---
+  function drawCam() {
+    const v = cam.video;
+    if (!cam.rec && v && v.videoWidth) {   // 待機時畫布跟著鏡頭方向
+      const land = v.videoWidth >= v.videoHeight, W = land ? 1280 : 720, H = land ? 720 : 1280;
+      if (camCv.width !== W || camCv.height !== H) { camCv.width = W; camCv.height = H; }
+    }
+    const W = camCv.width, H = camCv.height, g = camG, S = Math.min(W, H) / 720;
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    if (v && v.videoWidth) {
+      const k = Math.max(W / v.videoWidth, H / v.videoHeight), dw = v.videoWidth * k, dh = v.videoHeight * k;
+      g.save();
+      if (cam.facing === 'user') { g.translate(W, 0); g.scale(-1, 1); }   // 前鏡頭左右鏡像，比較直覺
+      g.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      g.restore();
+    }
+    // 錄影狀態
+    const sec = cam.rec ? Date.now() - cam.rec.startedAt : 0;
+    $('camStatus').textContent = cam.rec ? `● REC ${fmtDur(sec)}　${(cam.rec.sizeRef() / 1048576).toFixed(0)} MB` : (cam.stream ? '待機' : $('camStatus').textContent);
+    $('camStatus').style.color = cam.rec ? '#ff6b6b' : '#fff';
+    if (!cam.hud) return;
+
+    g.save(); g.textBaseline = 'middle';
+    const pad = 24 * S;
+    // 左上：日期時間 + 房間
+    const now = new Date(), p2 = (n) => String(n).padStart(2, '0');
+    const line1 = `${now.getFullYear()}/${p2(now.getMonth() + 1)}/${p2(now.getDate())}  ${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
+    const line2 = joined ? `#${joined.room}${amHost ? ' 👑' : ''}　${me.name}` : me.name || '';
+    g.font = `700 ${20 * S}px ${VFONT}`;
+    const tw = Math.max(g.measureText(line1).width, g.measureText(line2).width);
+    rrect(g, pad, pad, tw + 28 * S, 68 * S, 14 * S); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
+    g.fillStyle = '#fff'; g.fillText(line1, pad + 14 * S, pad + 22 * S);
+    g.font = `600 ${16 * S}px ${VFONT}`; g.fillStyle = '#ddd'; g.fillText(line2, pad + 14 * S, pad + 48 * S);
+    if (cam.rec && Math.floor(sec / 600) % 2 === 0) {   // 閃爍的 REC
+      g.beginPath(); g.arc(W - pad - 8 * S, pad + 14 * S, 8 * S, 0, Math.PI * 2); g.fillStyle = '#ff3b30'; g.fill();
+    }
+
+    // 左下：車速
+    const spd = String(Math.round(me.speed || 0));
+    g.font = `800 ${96 * S}px ${VFONT}`; const sw = g.measureText(spd).width;
+    const bw = Math.max(sw + 40 * S, 190 * S), bh = 140 * S, bx = pad, by = H - pad - bh;
+    rrect(g, bx, by, bw, bh, 18 * S); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
+    g.fillStyle = '#fff'; g.textAlign = 'left'; g.fillText(spd, bx + 20 * S, by + 62 * S);
+    g.font = `600 ${18 * S}px ${VFONT}`; g.fillStyle = '#ffcc00'; g.fillText('km/h', bx + 22 * S, by + 118 * S);
+    g.fillStyle = '#bbb'; g.font = `500 ${14 * S}px ${VFONT}`; g.textAlign = 'right';
+    g.fillText(me.acc != null ? `GPS ±${Math.round(me.acc)}m` : '等待 GPS', bx + bw - 16 * S, by + 118 * S);
+    g.textAlign = 'left';
+
+    // 右下：雷達（北朝上，顯示房間內其他人）
+    const others = [...drivers.values()].filter(d => d.lat != null && Date.now() - d.updatedAt < 60_000);
+    const R = 105 * S, cx = W - pad - R, cy = H - pad - R;
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 1.5 * S;
+    g.beginPath(); g.arc(cx, cy, R / 2, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.stroke();
+    g.fillStyle = '#ff6b6b'; g.font = `700 ${13 * S}px ${VFONT}`; g.textAlign = 'center'; g.fillText('N', cx, cy - R + 12 * S);
+    if (me.lat != null) {
+      const rel = others.map(d => {
+        const dx = (d.lng - me.lng) * 111320 * Math.cos(me.lat * Math.PI / 180), dy = (d.lat - me.lat) * 111320;
+        return { d, dx, dy, dist: Math.hypot(dx, dy) };
+      });
+      const far = Math.max(200, ...rel.map(r => r.dist));
+      const range = [250, 500, 1000, 2000, 5000, 10000].find(x => x >= far) || 10000;
+      g.fillStyle = '#bbb'; g.font = `500 ${11 * S}px ${VFONT}`;
+      g.fillText(range >= 1000 ? `${range / 1000} km` : `${range} m`, cx, cy + R - 10 * S);
+      for (const r of rel) {
+        const f = Math.min(1, r.dist / range), a = Math.atan2(r.dx, r.dy);
+        const x = cx + Math.sin(a) * f * (R - 10 * S), y = cy - Math.cos(a) * f * (R - 10 * S);
+        g.beginPath(); g.arc(x, y, 7 * S, 0, Math.PI * 2); g.fillStyle = r.d.color; g.fill();
+        g.lineWidth = 2 * S; g.strokeStyle = '#fff'; g.stroke();
+      }
+      // 自己在中心
+      g.save(); g.translate(cx, cy); g.rotate((me.heading || 0) * Math.PI / 180);
+      g.beginPath(); g.moveTo(0, -11 * S); g.lineTo(8 * S, 9 * S); g.lineTo(0, 5 * S); g.lineTo(-8 * S, 9 * S); g.closePath();
+      g.fillStyle = '#ffcc00'; g.fill(); g.restore();
+    } else {
+      g.fillStyle = '#bbb'; g.font = `500 ${13 * S}px ${VFONT}`; g.fillText('等待 GPS', cx, cy);
+    }
+    g.textAlign = 'left';
+
+    // 右上：房間排行（含自己，前 5 名）
+    if (joined && others.length) {
+      const all = [{ name: '我', color: me.color, speed: me.speed || 0, me: true }, ...others.map(d => ({ name: d.name, color: d.color, speed: d.speed || 0, host: room && d.id === room.host }))]
+        .sort((a, b) => b.speed - a.speed).slice(0, 5);
+      const rh = 30 * S, lw = 230 * S, lx = W - pad - lw, ly = pad + (cam.rec ? 30 * S : 0);
+      rrect(g, lx, ly, lw, 14 * S + all.length * rh, 14 * S); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
+      all.forEach((r, i) => {
+        const y = ly + 7 * S + i * rh + rh / 2;
+        g.beginPath(); g.arc(lx + 18 * S, y, 6 * S, 0, Math.PI * 2); g.fillStyle = r.color; g.fill();
+        g.fillStyle = r.me ? '#ffcc00' : '#fff'; g.font = `${r.me ? 800 : 600} ${15 * S}px ${VFONT}`;
+        let nm = (r.host ? '👑 ' : '') + r.name; while (g.measureText(nm).width > 120 * S && nm.length > 1) nm = nm.slice(0, -1);
+        g.fillText(nm, lx + 32 * S, y);
+        g.textAlign = 'right'; g.font = `800 ${16 * S}px ${VFONT}`; g.fillText(`${Math.round(r.speed)} km/h`, lx + lw - 14 * S, y); g.textAlign = 'left';
+      });
+    }
+    g.restore();
   }
 
   // ---------- 小提示 ----------

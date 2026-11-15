@@ -1748,12 +1748,12 @@
   }
 
   function drawRouteMap(g, S, x, y, size, others) {
-    rrect(g, x, y, size, size, 18 * S); g.fillStyle = 'rgba(0,0,0,.45)'; g.fill();
     const ids = [myId, ...others.map(d => d.id)];
     const lines = ids.map(id => ({ id, pts: trails.get(id) || [] })).filter(l => l.pts.length);
     if (!lines.length) {
-      g.fillStyle = '#bbb'; g.font = `500 ${14 * S}px ${VFONT}`; g.textAlign = 'center';
-      g.fillText('等待 GPS', x + size / 2, y + size / 2); g.textAlign = 'left'; return;
+      g.save(); g.shadowColor = 'rgba(0,0,0,.8)'; g.shadowBlur = 4 * S;
+      g.fillStyle = '#fff'; g.font = `600 ${14 * S}px ${VFONT}`; g.textAlign = 'center';
+      g.fillText('等待 GPS', x + size / 2, y + size / 2); g.restore(); return;
     }
     // 以公尺為單位的平面座標，等比例縮放到方框內
     const ref = lines[0].pts[lines[0].pts.length - 1], kx = 111320 * Math.cos(ref[0] * Math.PI / 180), ky = 111320;
@@ -1766,19 +1766,19 @@
     const ox = x + size / 2 - ((x0 + x1) / 2) * k, oy = y + size / 2 - ((y0 + y1) / 2) * k;
     const P = (p) => [ox + (p[1] - ref[1]) * kx * k, oy + (ref[0] - p[0]) * ky * k];
     g.save();
-    g.beginPath(); rrect(g, x, y, size, size, 18 * S); g.clip();
+    g.beginPath(); g.rect(x, y, size, size); g.clip();
     g.lineCap = g.lineJoin = 'round';
     // 先畫別人，再畫自己（自己在最上面）
     for (const l of lines.slice().reverse()) {
       const isMe = l.id === myId, d = isMe ? me : drivers.get(l.id);
-      g.strokeStyle = isMe ? '#ffcc00' : (d ? d.color : '#888');
-      g.globalAlpha = isMe ? 1 : 0.85; g.lineWidth = (isMe ? 4 : 3) * S;
+      const w = (isMe ? 4 : 3) * S;
       g.beginPath();
       l.pts.forEach((p, i) => {
         const [px, py] = P(p), prev = l.pts[i - 1];
         (i === 0 || p[2] - prev[2] > 15_000) ? g.moveTo(px, py) : g.lineTo(px, py);
       });
-      g.stroke(); g.globalAlpha = 1;
+      g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = w + 3 * S; g.stroke();   // 深色描邊，亮的畫面也看得清楚
+      g.strokeStyle = isMe ? '#ffcc00' : (d ? d.color : '#888'); g.lineWidth = w; g.stroke();
     }
     for (const d of others) {
       const [px, py] = P([d.lat, d.lng]);
@@ -1792,8 +1792,9 @@
       g.fillStyle = '#ffcc00'; g.fill(); g.lineWidth = 2 * S; g.strokeStyle = '#000'; g.stroke();
     }
     g.restore();
-    g.fillStyle = 'rgba(255,255,255,.7)'; g.font = `700 ${12 * S}px ${VFONT}`; g.textAlign = 'center';
-    g.fillText('N', x + size - 16 * S, y + 16 * S); g.textAlign = 'left';
+    g.save(); g.shadowColor = 'rgba(0,0,0,.85)'; g.shadowBlur = 4 * S;
+    g.fillStyle = '#fff'; g.font = `800 ${13 * S}px ${VFONT}`; g.textAlign = 'center';
+    g.fillText('N', x + size - 14 * S, y + 14 * S); g.restore();
   }
 
   // ---------- 小提示 ----------

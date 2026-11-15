@@ -131,7 +131,7 @@
   $('roomInput').value = new URLSearchParams(location.search).get('room') || store.get('rl.room') || '';
 
   // ---------- 地圖：有 Mapbox token 用 Mapbox，否則退回 OpenStreetMap ----------
-  const MAPBOX_TOKEN = '';
+  const MAPBOX_TOKEN = 'pk.eyJ1IjoiemVodWFxaW4iLCJhIjoiY213aGlsdm42MHBsbjMwcHAyaTl4dDU5OCJ9.aMS3CT6bhjVYFLjz-DPQww';
   const STYLES = [
     { name: '街道', url: 'mapbox://styles/mapbox/streets-v12' },
     { name: '深色', url: 'mapbox://styles/mapbox/dark-v11' },
@@ -146,7 +146,7 @@
     let styleIdx = Math.min(+(store.get('rl.style') || 0), STYLES.length - 1) || 0;
     const m = new mapboxgl.Map({
       container: 'map', style: STYLES[styleIdx].url, center: [START[1], START[0]], zoom: 15,
-      pitchWithRotate: false, dragRotate: false, attributionControl: true,
+      pitchWithRotate: false, dragRotate: false, attributionControl: true, language: 'zh-Hant',
     });
     m.touchZoomRotate.disableRotation();   // 地圖固定北朝上，箭頭方向才會對
     $('styleBtn').style.display = '';
@@ -392,7 +392,7 @@
     if (!window.isSecureContext) { $('joinErr').textContent = '定位需要 HTTPS 網址（localhost 除外），請看 README'; return; }
     store.set('rl.name', name); store.set('rl.room', room);
     joined = { name, room }; me.name = name;
-    $('roomPill').textContent = `房間：${room}`;
+    $('roomPill').textContent = '#' + room;
     $('join').style.display = 'none';
     navigator.geolocation.watchPosition(onPosition, onGpsError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
     keepAwake();

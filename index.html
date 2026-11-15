@@ -473,6 +473,7 @@
     else Object.assign(d, s);
     if (d.lat == null) return renderList();
     recordPoint(d);
+    pushTrail(d.id, d.lat, d.lng);
     if (!d.marker) ensureMarker(d, false); else moveTo(d, d.lat, d.lng);
     refreshIcon(d, false);
     renderList();
@@ -480,8 +481,17 @@
   function removeDriver(id) {
     const d = drivers.get(id);
     if (d && d.marker) d.marker.remove();
-    drivers.delete(id);
+    drivers.delete(id); trails.delete(id);
     renderList();
+  }
+
+  // ---------- 路線紀錄（錄影線路圖用；每人每秒一點，最多 30 分鐘） ----------
+  const trails = new Map();
+  function pushTrail(id, lat, lng) {
+    let a = trails.get(id); if (!a) trails.set(id, a = []);
+    const now = Date.now(), last = a[a.length - 1];
+    if (last && now - last[2] < 1000) return;
+    a.push([lat, lng, now]); if (a.length > 1800) a.splice(0, a.length - 1800);
   }
 
   // ---------- 排行列表 ----------
@@ -677,6 +687,7 @@
     $('mySpeed').textContent = Math.round(me.speed);
     $('gpsInfo').textContent = `GPS ±${Math.round(c.accuracy)}m`;
     recordPoint(me);
+    pushTrail(myId, me.lat, me.lng);
     sendPos();
   }
   function sendPos(force) {
@@ -748,6 +759,7 @@
       setTimeout(() => { try { c.end(true); } catch {} }, 300);   // 讓「離開」訊息先送出
     }
     for (const id of [...drivers.keys()]) removeDriver(id);
+    trails.clear();
     if (me.marker) { me.marker.remove(); me.marker = null; }
     Object.assign(me, { lat: null, lng: null, speed: 0, heading: null, acc: null, to: null, shown: null });
     lastFix = null; ctl = { state: 'idle' }; joined = null;
@@ -1493,7 +1505,7 @@
   }
 
   // =====================================================================
-  // 錄影（行車記錄器）：鏡頭畫面 + 即時疊加車速／時間／排行／雷達，直接錄成影片
+  // 錄影（行車記錄器）：鏡頭畫面 + 即時疊加車速／時間／排行／線路圖，直接錄成影片
   // 畫在 canvas 上再錄 canvas，所以看到的就是錄下來的
   // =====================================================================
   const cam = { stream: null, video: null, facing: 'environment', lens: store.get('rl.lens') === 'wide' ? 'wide' : 'normal', wideOk: null, hud: true, mic: true, rec: null, raf: 0, W: 1280, H: 720, out: null };
@@ -1703,52 +1715,23 @@
       g.beginPath(); g.arc(W - pad - 8 * S, pad + 14 * S, 8 * S, 0, Math.PI * 2); g.fillStyle = '#ff3b30'; g.fill();
     }
 
-    // 左下：車速
+    // 左下：車速（精簡一行）
     const spd = String(Math.round(me.speed || 0));
-    g.font = `800 ${96 * S}px ${VFONT}`; const sw = g.measureText(spd).width;
-    const bw = Math.max(sw + 40 * S, 190 * S), bh = 140 * S, bx = pad, by = H - pad - bh;
-    rrect(g, bx, by, bw, bh, 18 * S); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
-    g.fillStyle = '#fff'; g.textAlign = 'left'; g.fillText(spd, bx + 20 * S, by + 62 * S);
-    g.font = `600 ${18 * S}px ${VFONT}`; g.fillStyle = '#ffcc00'; g.fillText('km/h', bx + 22 * S, by + 118 * S);
-    g.fillStyle = '#bbb'; g.font = `500 ${14 * S}px ${VFONT}`; g.textAlign = 'right';
-    g.fillText(me.acc != null ? `GPS ±${Math.round(me.acc)}m` : '等待 GPS', bx + bw - 16 * S, by + 118 * S);
-    g.textAlign = 'left';
+    g.font = `800 ${64 * S}px ${VFONT}`; const sw = g.measureText(spd).width;
+    g.font = `700 ${20 * S}px ${VFONT}`; const uw = g.measureText('km/h').width;
+    const sbw = sw + uw + 46 * S, sbh = 82 * S, sbx = pad, sby = H - pad - sbh;
+    rrect(g, sbx, sby, sbw, sbh, 16 * S); g.fillStyle = 'rgba(0,0,0,.45)'; g.fill();
+    g.textBaseline = 'alphabetic';
+    g.fillStyle = '#fff'; g.font = `800 ${64 * S}px ${VFONT}`; g.fillText(spd, sbx + 18 * S, sby + 64 * S);
+    g.fillStyle = '#ffcc00'; g.font = `700 ${20 * S}px ${VFONT}`; g.fillText('km/h', sbx + 28 * S + sw, sby + 62 * S);
+    g.textBaseline = 'middle';
 
-    // 右下：雷達（北朝上，顯示房間內其他人）
+    // 右下：線路圖（北朝上，自己和房間內其他人跑過的路線，自動縮放）
     const others = [...drivers.values()].filter(d => d.lat != null && Date.now() - d.updatedAt < 60_000);
-    const R = 105 * S, cx = W - pad - R, cy = H - pad - R;
-    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
-    g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 1.5 * S;
-    g.beginPath(); g.arc(cx, cy, R / 2, 0, Math.PI * 2); g.stroke();
-    g.beginPath(); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.stroke();
-    g.fillStyle = '#ff6b6b'; g.font = `700 ${13 * S}px ${VFONT}`; g.textAlign = 'center'; g.fillText('N', cx, cy - R + 12 * S);
-    if (me.lat != null) {
-      const rel = others.map(d => {
-        const dx = (d.lng - me.lng) * 111320 * Math.cos(me.lat * Math.PI / 180), dy = (d.lat - me.lat) * 111320;
-        return { d, dx, dy, dist: Math.hypot(dx, dy) };
-      });
-      const far = Math.max(200, ...rel.map(r => r.dist));
-      const range = [250, 500, 1000, 2000, 5000, 10000].find(x => x >= far) || 10000;
-      g.fillStyle = '#bbb'; g.font = `500 ${11 * S}px ${VFONT}`;
-      g.fillText(range >= 1000 ? `${range / 1000} km` : `${range} m`, cx, cy + R - 10 * S);
-      for (const r of rel) {
-        const f = Math.min(1, r.dist / range), a = Math.atan2(r.dx, r.dy);
-        const x = cx + Math.sin(a) * f * (R - 10 * S), y = cy - Math.cos(a) * f * (R - 10 * S);
-        g.beginPath(); g.arc(x, y, 7 * S, 0, Math.PI * 2); g.fillStyle = r.d.color; g.fill();
-        g.lineWidth = 2 * S; g.strokeStyle = '#fff'; g.stroke();
-      }
-      // 自己在中心
-      g.save(); g.translate(cx, cy); g.rotate((me.heading || 0) * Math.PI / 180);
-      g.beginPath(); g.moveTo(0, -11 * S); g.lineTo(8 * S, 9 * S); g.lineTo(0, 5 * S); g.lineTo(-8 * S, 9 * S); g.closePath();
-      g.fillStyle = '#ffcc00'; g.fill(); g.restore();
-    } else {
-      g.fillStyle = '#bbb'; g.font = `500 ${13 * S}px ${VFONT}`; g.fillText('等待 GPS', cx, cy);
-    }
-    g.textAlign = 'left';
-
+    drawRouteMap(g, S, W - pad - 240 * S, H - pad - 240 * S, 240 * S, others);
     // 右上：房間排行（含自己，前 5 名）
     if (joined && others.length) {
-      const all = [{ name: '我', color: me.color, speed: me.speed || 0, me: true }, ...others.map(d => ({ name: d.name, color: d.color, speed: d.speed || 0, host: room && d.id === room.host }))]
+      const all = [{ name: '我', color: '#ffcc00', speed: me.speed || 0, me: true }, ...others.map(d => ({ name: d.name, color: d.color, speed: d.speed || 0, host: room && d.id === room.host }))]
         .sort((a, b) => b.speed - a.speed).slice(0, 5);
       const rh = 30 * S, lw = 230 * S, lx = W - pad - lw, ly = pad + (cam.rec ? 30 * S : 0);
       rrect(g, lx, ly, lw, 14 * S + all.length * rh, 14 * S); g.fillStyle = 'rgba(0,0,0,.5)'; g.fill();
@@ -1762,6 +1745,55 @@
       });
     }
     g.restore();
+  }
+
+  function drawRouteMap(g, S, x, y, size, others) {
+    rrect(g, x, y, size, size, 18 * S); g.fillStyle = 'rgba(0,0,0,.45)'; g.fill();
+    const ids = [myId, ...others.map(d => d.id)];
+    const lines = ids.map(id => ({ id, pts: trails.get(id) || [] })).filter(l => l.pts.length);
+    if (!lines.length) {
+      g.fillStyle = '#bbb'; g.font = `500 ${14 * S}px ${VFONT}`; g.textAlign = 'center';
+      g.fillText('等待 GPS', x + size / 2, y + size / 2); g.textAlign = 'left'; return;
+    }
+    // 以公尺為單位的平面座標，等比例縮放到方框內
+    const ref = lines[0].pts[lines[0].pts.length - 1], kx = 111320 * Math.cos(ref[0] * Math.PI / 180), ky = 111320;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const l of lines) for (const p of l.pts) {
+      const px = (p[1] - ref[1]) * kx, py = (ref[0] - p[0]) * ky;
+      if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+    }
+    const inner = 22 * S, span = Math.max(x1 - x0, y1 - y0, 150), k = (size - inner * 2) / span;
+    const ox = x + size / 2 - ((x0 + x1) / 2) * k, oy = y + size / 2 - ((y0 + y1) / 2) * k;
+    const P = (p) => [ox + (p[1] - ref[1]) * kx * k, oy + (ref[0] - p[0]) * ky * k];
+    g.save();
+    g.beginPath(); rrect(g, x, y, size, size, 18 * S); g.clip();
+    g.lineCap = g.lineJoin = 'round';
+    // 先畫別人，再畫自己（自己在最上面）
+    for (const l of lines.slice().reverse()) {
+      const isMe = l.id === myId, d = isMe ? me : drivers.get(l.id);
+      g.strokeStyle = isMe ? '#ffcc00' : (d ? d.color : '#888');
+      g.globalAlpha = isMe ? 1 : 0.85; g.lineWidth = (isMe ? 4 : 3) * S;
+      g.beginPath();
+      l.pts.forEach((p, i) => {
+        const [px, py] = P(p), prev = l.pts[i - 1];
+        (i === 0 || p[2] - prev[2] > 15_000) ? g.moveTo(px, py) : g.lineTo(px, py);
+      });
+      g.stroke(); g.globalAlpha = 1;
+    }
+    for (const d of others) {
+      const [px, py] = P([d.lat, d.lng]);
+      g.beginPath(); g.arc(px, py, 6 * S, 0, Math.PI * 2); g.fillStyle = d.color; g.fill();
+      g.lineWidth = 2 * S; g.strokeStyle = '#fff'; g.stroke();
+    }
+    if (me.lat != null) {
+      const [px, py] = P([me.lat, me.lng]);
+      g.translate(px, py); g.rotate((me.heading || 0) * Math.PI / 180);
+      g.beginPath(); g.moveTo(0, -11 * S); g.lineTo(8 * S, 9 * S); g.lineTo(0, 5 * S); g.lineTo(-8 * S, 9 * S); g.closePath();
+      g.fillStyle = '#ffcc00'; g.fill(); g.lineWidth = 2 * S; g.strokeStyle = '#000'; g.stroke();
+    }
+    g.restore();
+    g.fillStyle = 'rgba(255,255,255,.7)'; g.font = `700 ${12 * S}px ${VFONT}`; g.textAlign = 'center';
+    g.fillText('N', x + size - 16 * S, y + 16 * S); g.textAlign = 'left';
   }
 
   // ---------- 小提示 ----------

@@ -94,6 +94,7 @@
   #camDone.hidden { display:none; }
   #camDone video { flex:1; min-height:0; width:100%; background:#000; border-radius:12px; }
   #camDone .acts { display:flex; gap:8px; }
+  #camDoneText { white-space:pre-line; }
   #camDone .acts .bigbtn { flex:1; margin:0; }
   #camDone .acts .btn { background:#2c2c2c; font-size:15px; padding:0 16px; border-radius:12px; }
   @media (orientation: landscape) and (max-height: 600px) {
@@ -906,6 +907,7 @@
     recordPoint(me);
     pushTrail(myId, me.lat, me.lng);
     p2pOnFix(c.latitude, c.longitude, t, c.accuracy);
+    camTrackPoint();
     sendPos();
   }
   function sendPos(force) {
@@ -1213,13 +1215,17 @@
     let list = [];
     try { list = await DB.listSessions(); } catch { $('sessList').innerHTML = '<p class="hint">這個瀏覽器無法存取紀錄（可能是無痕模式）。</p>'; return; }
     list.sort((a, b) => b.startedAt - a.startedAt);
-    if (!list.length) { $('sessList').innerHTML = '<p class="hint">還沒有紀錄。加入房間後按「開始記錄」就會存在這支手機上。</p>'; return; }
+    if (!list.length) { $('sessList').innerHTML = '<p class="hint">還沒有紀錄。房主按「開始記錄」，或任何人用 🎥 錄影，都會存在這支手機上。</p>'; return; }
     $('sessList').innerHTML = list.map(s => {
-      const live = rec && rec.sid === s.sid;
+      const live = (rec && rec.sid === s.sid) || (camTrack && camTrack.sid === s.sid);
+      const isCam = s.kind === 'cam';
+      const title = isCam ? `🎥 錄影軌跡${s.room ? '　#' + esc(s.room) : ''}` : `#${esc(s.room)}`;
+      const who = isCam ? (s.video ? `影片：${esc(s.video.name)}` : '（影片沒有儲存）')
+                        : Object.values(s.drivers || {}).map(d => esc(d.name)).join('、');
       return `<div class="sess" data-sid="${esc(s.sid)}">
-        <div class="t">${fmtDate(s.startedAt)}　#${esc(s.room)}${live ? '　<span style="color:#ff6b6b">● 記錄中</span>' : ''}</div>
-        <div class="m">${fmtDur((s.endedAt || Date.now()) - s.startedAt)} · ${Object.keys(s.drivers || {}).length} 人 · ${s.count || 0} 筆
-          <br>${Object.values(s.drivers || {}).map(d => esc(d.name)).join('、')}</div>
+        <div class="t">${fmtDate(s.startedAt)}　${title}${live ? '　<span style="color:#ff6b6b">● 記錄中</span>' : ''}</div>
+        <div class="m">${fmtDur((s.endedAt || Date.now()) - s.startedAt)} · ${isCam ? '自己' : Object.keys(s.drivers || {}).length + ' 人'} · ${s.count || 0} 筆
+          <br>${who}</div>
         <div class="acts">
           <button class="btn primary" data-act="play">▶ 回放</button>
           <button class="btn" data-act="csv">匯出 CSV</button>
@@ -1237,6 +1243,7 @@
     const btn = e.target.closest('button[data-act]'); if (!btn) return;
     const sid = btn.closest('.sess').dataset.sid, act = btn.dataset.act;
     if (rec && rec.sid === sid) await flushRec();
+    if (camTrack && camTrack.sid === sid) await camTrackFlush();
     if (act === 'del') {
       if (!confirm('確定刪除這筆紀錄？刪除後無法復原。')) return;
       await DB.deleteSession(sid); openSheet(); return;
@@ -1867,7 +1874,8 @@
     mr.onstop = () => finishCamRec();
     mr.start(1000);
     $('camRec').classList.add('on');
-    toast('開始錄影');
+    camTrackStart(cam.rec.startedAt);
+    toast('開始錄影（同時記錄你的 GPS 軌跡）');
   }
   function stopCamRec(discard) {
     if (!cam.rec) return;
@@ -1879,18 +1887,65 @@
     const r = cam.rec; cam.rec = null;
     if (!r) return;
     r.out.getVideoTracks().forEach(t => t.stop());
-    if (r.discard || !r.chunks.length) return;
+    if (r.discard || !r.chunks.length) { camTrackStop(null); return; }
     const type = (r.mime || r.chunks[0].type || 'video/mp4').split(';')[0];
     const blob = new Blob(r.chunks, { type });
     const ext = type.includes('mp4') ? 'mp4' : 'webm';
     const name = `race-cam-${fmtFileDate(r.startedAt)}.${ext}`;
+    const trackN = camTrackStop({ name, size: blob.size, dur: Date.now() - r.startedAt });
     if (cam.out) URL.revokeObjectURL(cam.out.url);
     cam.out = { blob, name, url: URL.createObjectURL(blob) };
     $('camPreview').src = cam.out.url;
     $('camDoneText').textContent = `${name}　${fmtDur(Date.now() - r.startedAt)}　${(blob.size / 1048576).toFixed(1)} MB。` +
-      'iPhone 按「儲存／分享」後選「儲存影片」就會存進相簿。這段影片只存在這個畫面，離開前記得儲存。';
+      'iPhone 按「儲存／分享」後選「儲存影片」就會存進相簿。這段影片只存在這個畫面，離開前記得儲存。' +
+      (trackN ? `\n這段路的 GPS 軌跡（${trackN} 筆）已存到「紀錄」，可以回放、匯出 CSV／GPX 或軌跡影片。` : '\n這段錄影期間沒有收到 GPS，所以沒有軌跡紀錄。');
     $('camDone').classList.remove('hidden');
   }
+  // ---------- 錄影軌跡：錄影期間把自己的位置/車速存成一筆紀錄，跟影片配對 ----------
+  let camTrack = null;
+  function camTrackStart(startedAt) {
+    const sid = `cam-${new Date(startedAt).toISOString().replace(/[:.]/g, '-')}-${myId.slice(-4)}`;
+    camTrack = { sid, startedAt, room: joined ? joined.room : '', buf: [], last: 0, count: 0, video: null, endedAt: null };
+    camTrackPoint(true);
+    camTrackFlush();
+  }
+  function camTrackPoint(force) {
+    if (!camTrack || me.lat == null) return;
+    const now = Date.now();
+    if (!force && now - camTrack.last < REC_EVERY_MS) return;
+    camTrack.last = now;
+    camTrack.buf.push([now, myId, +me.lat.toFixed(6), +me.lng.toFixed(6), Math.round((me.speed || 0) * 10) / 10,
+      me.heading == null ? null : Math.round(me.heading)]);
+    camTrack.count++;
+  }
+  let camFlushing = false;
+  async function camTrackFlush(t = camTrack) {
+    if (!t || camFlushing) return;
+    camFlushing = true;
+    const pts = t.buf; t.buf = [];
+    try {
+      if (pts.length) await DB.addChunk(t.sid, pts);
+      if (t.count) await DB.putSession({ sid: t.sid, kind: 'cam', room: t.room, hostName: me.name, startedAt: t.startedAt,
+        endedAt: t.endedAt || Date.now(), drivers: { [myId]: { name: me.name || '我', color: me.color } }, count: t.count,
+        done: !!t.endedAt, video: t.video, course: courseOf() ? { name: courseOf().name || null } : null });
+    } catch (e) { t.buf = pts.concat(t.buf); console.warn('錄影軌跡寫入失敗', e); }
+    camFlushing = false;
+  }
+  setInterval(() => camTrackFlush(), 5000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') camTrackFlush(); });
+  // 結束：存最後一段，回傳筆數（0 表示沒收到 GPS，不留空紀錄）
+  function camTrackStop(video) {
+    const t = camTrack; camTrack = null;
+    if (!t) return 0;
+    t.endedAt = Date.now(); t.video = video;
+    const n = t.count;
+    (async () => {
+      while (camFlushing) await sleep(20);
+      if (n) await camTrackFlush(t); else { try { await DB.deleteSession(t.sid); } catch {} }
+    })();
+    return n;
+  }
+
   $('camShare').onclick = async () => {
     if (!cam.out) return;
     const file = new File([cam.out.blob], cam.out.name, { type: cam.out.blob.type });

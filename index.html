@@ -36,8 +36,14 @@
   #conn::before { content:"●"; margin-right:6px; color:#ff6b6b; }
   #conn.ok::before { color:#3cdc6c; }
   #top .spacer { flex:1; }
-  #roomPill { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  #roomPill { min-width:0; overflow:hidden; text-overflow:ellipsis; border:0; color:var(--fg); display:flex; align-items:center; gap:6px; }
+  #roomPill #roomName { overflow:hidden; text-overflow:ellipsis; }
+  #roomPill .x { flex:none; background:rgba(255,255,255,.14); border-radius:999px; padding:2px 8px; font-size:12px; }
+  body.replaying #roomPill { display:none; }
   #conn { flex:none; }
+  #conn.ok { font-size:0; padding:8px 11px; }
+  #conn.ok::before { font-size:13px; margin:0; }
+  #roomPill #roomName { min-width:2.5em; }
   .btn { white-space:nowrap; flex:none; pointer-events:auto; border:0; background:var(--card); color:var(--fg); border-radius:999px;
     padding:8px 12px; font-size:13px; backdrop-filter:blur(8px); }
   .btn.on { background:var(--accent); color:#111; }
@@ -141,7 +147,7 @@
 
 <div id="top">
   <div id="conn" class="pill">連線中…</div>
-  <div id="roomPill" class="pill"></div>
+  <button id="roomPill" class="pill" title="離開房間"><span id="roomName"></span><span class="x">離開</span></button>
   <div class="spacer"></div>
   <button id="followBtn" class="btn on">跟隨我</button>
   <button id="fitBtn" class="btn">全部</button>
@@ -388,24 +394,26 @@
   const topicOf = (id) => `${NS}/${encodeURIComponent(joined.room)}/${id}`;
   function join() {
     if (!joined || client) return;
-    client = mqtt.connect(BROKER, {
+    const c = client = mqtt.connect(BROKER, {
       clientId: 'rl-' + myId + '-' + Math.random().toString(36).slice(2, 6),
       clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 10000,
       will: { topic: topicOf(myId), payload: JSON.stringify({ id: myId, leave: true }), qos: 0, retain: false },
     });
-    client.on('connect', () => {
+    c.on('connect', () => {
+      if (client !== c) return;
       connected = true;
       $('conn').textContent = '已連線'; $('conn').classList.add('ok');
       client.subscribe(`${NS}/${encodeURIComponent(joined.room)}/+`, { qos: 0 });
       sendPos(true);
       if (rec) publishCtl();
     });
-    const down = () => { connected = false; $('conn').textContent = '斷線，重連中…'; $('conn').classList.remove('ok'); };
-    client.on('close', down);
-    client.on('offline', down);
-    client.on('error', down);
-    client.on('message', (topic, buf) => {
-      if (topic === ctlTopic()) { let c = null; try { c = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onCtl(c); }
+    const down = () => { if (client !== c) return; connected = false; $('conn').textContent = '斷線，重連中…'; $('conn').classList.remove('ok'); };
+    c.on('close', down);
+    c.on('offline', down);
+    c.on('error', down);
+    c.on('message', (topic, buf) => {
+      if (client !== c) return;
+      if (topic === ctlTopic()) { let cm = null; try { cm = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onCtl(cm); }
       let s; try { s = JSON.parse(buf.toString()); } catch { return; }
       if (!s || typeof s.id !== 'string' || s.id === myId) return;
       if (s.leave) return removeDriver(s.id);
@@ -474,7 +482,7 @@
   }
 
   // ---------- 保持螢幕常亮（網頁版在背景會停止定位） ----------
-  let wakeLock = null;
+  let wakeLock = null, watchId = null, demoTimer = null;
   async function keepAwake() {
     try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
   }
@@ -489,19 +497,51 @@
     if (!window.isSecureContext) { $('joinErr').textContent = '定位需要 HTTPS 網址（localhost 除外），請看 README'; return; }
     store.set('rl.name', name); store.set('rl.room', room);
     joined = { name, room }; me.name = name;
-    $('roomPill').textContent = '#' + room;
+    $('roomName').textContent = '#' + room;
     $('join').style.display = 'none';
-    navigator.geolocation.watchPosition(onPosition, onGpsError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+    watchId = navigator.geolocation.watchPosition(onPosition, onGpsError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
     keepAwake();
     join();
     if ($('demoInput').checked) startDemo();
   };
 
+
+  // ---------- 離開房間 ----------
+  $('roomPill').onclick = async () => {
+    if (!joined) return;
+    const msg = rec ? `你正在記錄中，離開會停止記錄並儲存。\n確定離開房間 #${joined.room}？` : `確定離開房間 #${joined.room}？`;
+    if (!confirm(msg)) return;
+    await leaveRoom();
+  };
+  async function leaveRoom() {
+    if (rec) await stopRec();                              // 房主離開：先停止並存檔，通知大家
+    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    clearInterval(demoTimer); demoTimer = null;
+    try { if (wakeLock) await wakeLock.release(); } catch {}
+    wakeLock = null;
+    if (client) {
+      const c = client;
+      try { if (connected) c.publish(topicOf(myId), JSON.stringify({ id: myId, leave: true })); } catch {}
+      client = null; connected = false;
+      setTimeout(() => { try { c.end(true); } catch {} }, 300);   // 讓「離開」訊息先送出
+    }
+    for (const id of [...drivers.keys()]) removeDriver(id);
+    if (me.marker) { me.marker.remove(); me.marker = null; }
+    Object.assign(me, { lat: null, lng: null, speed: 0, heading: null, acc: null, to: null, shown: null });
+    lastFix = null; ctl = { state: 'idle' }; joined = null;
+    $('mySpeed').textContent = '0';
+    $('gpsInfo').textContent = '等待 GPS…';
+    $('conn').textContent = '連線中…'; $('conn').classList.remove('ok');
+    renderRec(); renderList();
+    $('join').style.display = '';
+  }
+
   // ---------- 示範模式：在自己附近放 3 台模擬車（只在本機顯示，不會上傳） ----------
   function startDemo() {
     const bots = ['阿明', 'Kevin', 'Amy'].map((n, i) => ({ id: 'demo-' + i, name: n + '(模擬)', r: 250 + i * 150, a: i * 2, base: 45 + i * 20 }));
     let t = 0;
-    setInterval(() => {
+    clearInterval(demoTimer);
+    demoTimer = setInterval(() => {
       if (me.lat == null) return;
       t++;
       for (const [i, b] of bots.entries()) {

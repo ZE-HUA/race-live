@@ -79,6 +79,11 @@
   #camTop .btn.on { background:var(--accent); color:#111; }
   #camStatus { white-space:nowrap; color:#fff; font-size:13px; background:rgba(30,30,30,.75); padding:8px 12px; border-radius:999px; font-variant-numeric:tabular-nums; }
   #camBar { position:absolute; left:0; right:0; bottom:calc(env(safe-area-inset-bottom) + 18px); display:flex; justify-content:center; align-items:center; gap:28px; }
+  #camLens { gap:4px; background:rgba(30,30,30,.75); border-radius:12px; padding:4px; flex-wrap:nowrap; }
+  #camLens button { background:transparent; color:#fff; font-size:12px; line-height:1.25; padding:6px 9px; border-radius:9px; }
+  #camLens button.on { background:var(--accent); color:#111; font-weight:700; }
+  #camLens button.na { opacity:.35; }
+  #camLens.hidden { visibility:hidden; }
   #camRec { width:72px; height:72px; border-radius:50%; border:5px solid #fff; background:transparent; padding:0; display:flex; align-items:center; justify-content:center; }
   #camRec i { display:block; width:52px; height:52px; border-radius:50%; background:#e53935; transition:all .2s; }
   #camRec.on i { width:28px; height:28px; border-radius:6px; }
@@ -271,12 +276,12 @@
     <span id="camStatus">準備中</span>
     <span class="sp"></span>
     <button id="camHud" class="btn on">疊加資訊</button>
-    <button id="camMic" class="btn">🔇 收音</button>
+    <button id="camMic" class="btn on">🎙️ 收音</button>
   </div>
   <div id="camBar">
-    <button id="camFlip" class="btn">🔄 鏡頭</button>
+    <button id="camFlip" class="btn">🔄 前/後</button>
     <button id="camRec" title="開始／停止錄影"><i></i></button>
-    <span style="width:74px"></span>
+    <div id="camLens" class="seg"><button data-v="wide">廣角<br>0.5×</button><button data-v="normal">正常<br>1×</button></div>
   </div>
   <div id="camDone" class="hidden">
     <video id="camPreview" controls playsinline></video>
@@ -1491,7 +1496,7 @@
   // 錄影（行車記錄器）：鏡頭畫面 + 即時疊加車速／時間／排行／雷達，直接錄成影片
   // 畫在 canvas 上再錄 canvas，所以看到的就是錄下來的
   // =====================================================================
-  const cam = { stream: null, video: null, facing: 'environment', hud: true, mic: false, rec: null, raf: 0, W: 1280, H: 720, out: null };
+  const cam = { stream: null, video: null, facing: 'environment', lens: store.get('rl.lens') === 'wide' ? 'wide' : 'normal', wideOk: null, hud: true, mic: true, rec: null, raf: 0, W: 1280, H: 720, out: null };
   const camCv = $('camCanvas'), camG = camCv.getContext('2d');
 
   $('camBtn').onclick = openCam;
@@ -1509,11 +1514,22 @@
     stopCamStream();
     $('camMsg').textContent = '開啟鏡頭中…'; $('camStatus').textContent = '準備中';
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('camMsg').textContent = '這個瀏覽器不能使用鏡頭'; return; }
+    const open = (videoSel) => navigator.mediaDevices.getUserMedia({
+      video: { ...videoSel, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      audio: cam.mic ? { echoCancellation: false, noiseSuppression: true } : false,
+    });
     try {
-      cam.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: cam.facing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-        audio: cam.mic ? { echoCancellation: false, noiseSuppression: true } : false,
-      });
+      const first = await pickCamera();
+      cam.stream = await open(first);
+      cam.openedId = first.deviceId ? first.deviceId.exact : null;
+      // 第一次授權前拿不到鏡頭名稱；授權後再挑一次，選到的不同就重開
+      const want = await pickCamera(), cur = cam.stream.getVideoTracks()[0].getSettings().deviceId;
+      if (want.deviceId && want.deviceId.exact !== cur) {
+        cam.stream.getTracks().forEach(t => t.stop());
+        cam.stream = await open(want);
+        cam.openedId = want.deviceId.exact;
+      }
+      await applyLensZoom();
     } catch (e) {
       $('camMsg').textContent = e.name === 'NotAllowedError'
         ? '沒有鏡頭權限。請到手機的「設定 → Safari（或 Chrome）→ 相機／麥克風」允許，再重新打開。'
@@ -1526,6 +1542,53 @@
     $('camMsg').textContent = '';
     $('camStatus').textContent = '待機';
   }
+  // 挑鏡頭：iPhone 會列出「後置超廣角相機 / Back Ultra Wide Camera」等名稱
+  const RX_FRONT = /front|前置|facing front/i, RX_ULTRA = /ultra|超廣角|超广角/i;
+  const RX_OTHER = /ultra|超廣角|超广角|tele|望遠|望远|dual|雙|双|triple|三鏡|三镜|depth|景深|truedepth|desk|桌上/i;
+  async function pickCamera() {
+    if (cam.facing === 'user') return { facingMode: 'user' };
+    let devs = [];
+    try { devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); } catch {}
+    if (!devs.some(d => d.label)) return { facingMode: { ideal: 'environment' } };   // 還沒授權，名稱是空的
+    const backs = devs.filter(d => !RX_FRONT.test(d.label));
+    const ultra = backs.find(d => RX_ULTRA.test(d.label));
+    const main = backs.find(d => /^(back camera|後置相機|后置相机)$/i.test(d.label.trim())) || backs.find(d => !RX_OTHER.test(d.label));
+    cam.ultraId = ultra ? ultra.deviceId : null;
+    if (cam.lens === 'wide' && ultra) return { deviceId: { exact: ultra.deviceId } };
+    if (main) return { deviceId: { exact: main.deviceId } };
+    return { facingMode: { ideal: 'environment' } };
+  }
+  // 沒有獨立的超廣角鏡頭時（多數 Android），改用縮放縮到最廣
+  async function applyLensZoom() {
+    const tr = cam.stream && cam.stream.getVideoTracks()[0];
+    if (!tr || cam.facing === 'user') { renderLens(); return; }
+    const usingUltra = !!cam.ultraId && (tr.getSettings().deviceId === cam.ultraId || cam.openedId === cam.ultraId);
+    const caps = tr.getCapabilities ? tr.getCapabilities() : {};
+    const zoomOk = caps.zoom && caps.zoom.min < 1;
+    cam.wideOk = !!cam.ultraId || !!zoomOk;
+    try {
+      if (caps.zoom) {
+        const z = cam.lens === 'wide' && !usingUltra && zoomOk ? caps.zoom.min : Math.min(Math.max(1, caps.zoom.min), caps.zoom.max);
+        await tr.applyConstraints({ advanced: [{ zoom: z }] });
+      }
+    } catch {}
+    if (cam.lens === 'wide' && !usingUltra && !zoomOk) toast('這支手機的瀏覽器沒有開放廣角鏡頭，先使用正常鏡頭');
+    renderLens();
+  }
+  function renderLens() {
+    $('camLens').classList.toggle('hidden', cam.facing === 'user');
+    $('camLens').querySelectorAll('button').forEach(b => {
+      b.classList.toggle('on', b.dataset.v === cam.lens);
+      b.classList.toggle('na', b.dataset.v === 'wide' && cam.wideOk === false);
+    });
+  }
+  $('camLens').onclick = async (e) => {
+    const b = e.target.closest('button'); if (!b || b.dataset.v === cam.lens) return;
+    if (cam.rec) { toast('錄影中不能切換鏡頭'); return; }
+    if (b.dataset.v === 'wide' && cam.wideOk === false) { toast('這支手機的瀏覽器沒有開放廣角鏡頭'); return; }
+    cam.lens = b.dataset.v; store.set('rl.lens', cam.lens);
+    await startCamStream();
+  };
   function stopCamStream() {
     if (cam.stream) cam.stream.getTracks().forEach(t => t.stop());
     cam.stream = null;

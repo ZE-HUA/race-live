@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111">
+<title>Race Live 多人即時位置</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg:#111; --fg:#f5f5f5; --muted:#9a9a9a; --card:rgba(20,20,20,.88); --accent:#ffcc00; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif; }
+  #map { position:fixed; inset:0; }
+
+  /* 加入畫面 */
+  #join { position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(circle at 30% 20%,#2a2a2a,#0b0b0b); padding:24px; }
+  #join form { width:100%; max-width:360px; display:flex; flex-direction:column; gap:12px; }
+  #join h1 { margin:0 0 4px; font-size:28px; letter-spacing:.5px; }
+  #join h1 span { color:var(--accent); }
+  #join p { margin:0 0 8px; color:var(--muted); font-size:14px; line-height:1.5; }
+  #join label { font-size:13px; color:var(--muted); }
+  #join input { width:100%; padding:14px; border-radius:12px; border:1px solid #333; background:#1b1b1b;
+    color:var(--fg); font-size:17px; margin-top:4px; }
+  #join button { padding:15px; border:0; border-radius:12px; background:var(--accent); color:#111;
+    font-size:17px; font-weight:700; margin-top:6px; }
+  #joinErr { color:#ff6b6b; font-size:14px; min-height:1em; }
+
+  /* 頂部狀態列 */
+  #top { position:fixed; z-index:1000; top:calc(env(safe-area-inset-top) + 10px); left:10px; right:10px;
+    display:flex; gap:8px; align-items:center; pointer-events:none; }
+  .pill { pointer-events:auto; background:var(--card); border-radius:999px; padding:8px 12px; font-size:13px;
+    backdrop-filter:blur(8px); white-space:nowrap; }
+  #conn::before { content:"●"; margin-right:6px; color:#ff6b6b; }
+  #conn.ok::before { color:#3cdc6c; }
+  #top .spacer { flex:1; }
+  .btn { pointer-events:auto; border:0; background:var(--card); color:var(--fg); border-radius:999px;
+    padding:8px 12px; font-size:13px; backdrop-filter:blur(8px); }
+  .btn.on { background:var(--accent); color:#111; }
+
+  /* 底部：我的車速 + 排行 */
+  #bottom { position:fixed; z-index:1000; left:10px; right:10px; bottom:calc(env(safe-area-inset-bottom) + 10px);
+    display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+  #hud { pointer-events:auto; background:var(--card); border-radius:18px; padding:10px 16px;
+    display:flex; align-items:baseline; gap:10px; backdrop-filter:blur(8px); }
+  #mySpeed { font-size:52px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; }
+  #hud .unit { color:var(--muted); font-size:15px; }
+  #hud .meta { margin-left:auto; text-align:right; font-size:12px; color:var(--muted); line-height:1.5; }
+  #list { pointer-events:auto; background:var(--card); border-radius:18px; padding:6px; max-height:32vh;
+    overflow:auto; backdrop-filter:blur(8px); }
+  #list:empty { display:none; }
+  .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:12px; }
+  .row:active { background:rgba(255,255,255,.08); }
+  .row .dot { width:12px; height:12px; border-radius:50%; flex:none; }
+  .row .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .name small { color:var(--muted); margin-left:6px; }
+  .row .spd { font-weight:700; font-variant-numeric:tabular-nums; }
+  .row.stale { opacity:.45; }
+
+  /* 地圖上的車子標記 */
+  .car { position:relative; width:0; height:0; }
+  .car .arrow { position:absolute; left:-13px; top:-13px; width:26px; height:26px; border-radius:50%;
+    background:var(--c); border:3px solid #fff; box-shadow:0 1px 6px rgba(0,0,0,.5);
+    display:flex; align-items:center; justify-content:center; }
+  .car .arrow svg { width:16px; height:16px; display:block; }
+  .car.noheading .arrow svg { display:none; }
+  .car .tag { position:absolute; left:16px; top:-30px; background:var(--c); color:#fff; padding:3px 8px;
+    border-radius:8px; font-size:12px; font-weight:600; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.4);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif; }
+  .car .tag b { font-size:14px; margin-left:4px; font-variant-numeric:tabular-nums; }
+  .car.me .arrow { width:30px; height:30px; left:-15px; top:-15px; border-color:var(--accent); }
+  .car.stale { opacity:.45; }
+  .leaflet-div-icon { background:none; border:0; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="join">
+  <form id="joinForm">
+    <h1>Race <span>Live</span></h1>
+    <p>同一個房間代碼的人，會在地圖上即時看到彼此的位置和車速。<br>
+      位置經由公開伺服器傳送，知道房間代碼的人都看得到，代碼請取得難猜一點。</p>
+    <label>你的名字<input id="nameInput" maxlength="20" placeholder="例如：Tommy" required></label>
+    <label>房間代碼<input id="roomInput" maxlength="32" placeholder="例如：test" required></label>
+    <label style="display:flex;align-items:center;gap:8px;color:var(--fg);font-size:15px">
+      <input id="demoInput" type="checkbox" style="width:auto;margin:0"> 加入 3 台模擬車（一個人測試用）</label>
+    <button type="submit">開始分享位置</button>
+    <div id="joinErr"></div>
+  </form>
+</div>
+
+<div id="top">
+  <div id="conn" class="pill">連線中…</div>
+  <div id="roomPill" class="pill"></div>
+  <div class="spacer"></div>
+  <button id="followBtn" class="btn on">跟隨我</button>
+  <button id="fitBtn" class="btn">全部</button>
+</div>
+
+<div id="bottom">
+  <div id="list"></div>
+  <div id="hud">
+    <div id="mySpeed">0</div><div class="unit">km/h</div>
+    <div class="meta"><div id="gpsInfo">等待 GPS…</div><div id="countInfo"></div></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+(() => {
+  const STALE_MS = 10_000;      // 超過 10 秒沒更新 → 灰掉
+  const SEND_EVERY_MS = 1000;   // 最多每秒上傳一次
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+
+  // 每支手機固定一個 id，重新整理後還是同一台車
+  let myId = store.get('rl.id');
+  if (!myId) { myId = 'u-' + Math.random().toString(36).slice(2, 10); store.set('rl.id', myId); }
+  $('nameInput').value = store.get('rl.name') || '';
+  $('roomInput').value = new URLSearchParams(location.search).get('room') || store.get('rl.room') || '';
+
+  // ---------- 地圖 ----------
+  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([25.0330, 121.5654], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap',
+  }).addTo(map);
+
+  let follow = true;
+  $('followBtn').onclick = () => { follow = !follow; $('followBtn').classList.toggle('on', follow); if (follow && me.lat) map.panTo([me.lat, me.lng]); };
+  $('fitBtn').onclick = () => {
+    follow = false; $('followBtn').classList.remove('on');
+    const pts = [...drivers.values()].filter(d => d.lat != null).map(d => [d.lat, d.lng]);
+    if (me.lat != null) pts.push([me.lat, me.lng]);
+    if (pts.length) map.fitBounds(pts, { padding: [60, 60], maxZoom: 17 });
+  };
+  map.on('dragstart', () => { follow = false; $('followBtn').classList.remove('on'); });
+
+  // ---------- 車子標記（含平滑移動） ----------
+  const drivers = new Map();   // 其他車手
+  const me = { id: myId, name: '', color: '#ffcc00', lat: null, lng: null, speed: 0, heading: null, acc: null, updatedAt: 0 };
+
+  function carHtml(d, isMe) {
+    const stale = !isMe && Date.now() - d.updatedAt > STALE_MS;
+    const cls = ['car', isMe ? 'me' : '', d.heading == null ? 'noheading' : '', stale ? 'stale' : ''].join(' ');
+    const rot = d.heading == null ? 0 : d.heading;
+    return `<div class="${cls}" style="--c:${d.color}">
+      <div class="arrow" style="transform:rotate(${rot}deg)"><svg viewBox="0 0 24 24"><path d="M12 2 L20 21 L12 16.5 L4 21 Z" fill="#fff"/></svg></div>
+      <div class="tag">${esc(isMe ? '我' : d.name)}<b>${Math.round(d.speed || 0)}</b></div></div>`;
+  }
+  function ensureMarker(d, isMe) {
+    if (!d.marker) {
+      d.marker = L.marker([d.lat, d.lng], {
+        icon: L.divIcon({ className: '', html: carHtml(d, isMe), iconSize: [0, 0] }),
+        zIndexOffset: isMe ? 1000 : 0,
+      }).addTo(map);
+      d.shown = { lat: d.lat, lng: d.lng };
+    }
+  }
+  function refreshIcon(d, isMe) {
+    const el = d.marker && d.marker.getElement();
+    if (el) el.innerHTML = carHtml(d, isMe);
+  }
+  // 每次收到新座標，用 ~1 秒把標記滑過去，看起來不會一格一格跳
+  function moveTo(d, lat, lng) {
+    d.from = { ...(d.shown || { lat, lng }) };
+    d.to = { lat, lng };
+    d.animStart = performance.now();
+  }
+  function animate(now) {
+    for (const d of [me, ...drivers.values()]) {
+      if (!d.marker || !d.to) continue;
+      const k = Math.min(1, (now - d.animStart) / 1000);
+      d.shown = { lat: d.from.lat + (d.to.lat - d.from.lat) * k, lng: d.from.lng + (d.to.lng - d.from.lng) * k };
+      d.marker.setLatLng([d.shown.lat, d.shown.lng]);
+    }
+    requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+
+  function upsertDriver(s) {
+    if (s.id === myId) return;
+    let d = drivers.get(s.id);
+    if (!d) { d = { ...s }; drivers.set(s.id, d); }
+    else Object.assign(d, s);
+    if (d.lat == null) return renderList();
+    if (!d.marker) ensureMarker(d, false); else moveTo(d, d.lat, d.lng);
+    refreshIcon(d, false);
+    renderList();
+  }
+  function removeDriver(id) {
+    const d = drivers.get(id);
+    if (d && d.marker) map.removeLayer(d.marker);
+    drivers.delete(id);
+    renderList();
+  }
+
+  // ---------- 排行列表 ----------
+  function renderList() {
+    const rows = [...drivers.values()].filter(d => d.lat != null)
+      .sort((a, b) => (b.speed || 0) - (a.speed || 0));
+    $('list').innerHTML = rows.map(d => {
+      const stale = Date.now() - d.updatedAt > STALE_MS;
+      const dist = me.lat != null ? fmtDist(haversine(me, d)) : '';
+      return `<div class="row ${stale ? 'stale' : ''}" data-id="${esc(d.id)}">
+        <span class="dot" style="background:${d.color}"></span>
+        <span class="name">${esc(d.name)}<small>${stale ? '訊號中斷' : dist}</small></span>
+        <span class="spd">${Math.round(d.speed || 0)} km/h</span></div>`;
+    }).join('');
+    $('countInfo').textContent = `房間內 ${drivers.size + 1} 人`;
+  }
+  $('list').onclick = (e) => {
+    const row = e.target.closest('.row'); if (!row) return;
+    const d = drivers.get(row.dataset.id); if (!d) return;
+    follow = false; $('followBtn').classList.remove('on');
+    map.setView([d.lat, d.lng], Math.max(map.getZoom(), 16));
+  };
+  setInterval(() => { for (const d of drivers.values()) refreshIcon(d, false); renderList(); }, 2000);
+
+  // ---------- 連線 ----------
+  // 透過公開 MQTT 伺服器（WebSocket over TLS）交換位置，不需要自己架後端
+  const BROKER = (window.RACE_LIVE_BROKER) || 'wss://broker.hivemq.com:8884/mqtt';
+  const NS = 'racelive-tw/v1';
+  const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+    '#42d4f4', '#f032e6', '#9a6324', '#469990', '#000075', '#808000', '#c2185b'];
+  function colorFor(id) { let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; }
+  me.color = colorFor(myId);
+
+  let client = null, connected = false, joined = null;
+  const topicOf = (id) => `${NS}/${encodeURIComponent(joined.room)}/${id}`;
+  function join() {
+    if (!joined || client) return;
+    client = mqtt.connect(BROKER, {
+      clientId: 'rl-' + myId + '-' + Math.random().toString(36).slice(2, 6),
+      clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 10000,
+      will: { topic: topicOf(myId), payload: JSON.stringify({ id: myId, leave: true }), qos: 0, retain: false },
+    });
+    client.on('connect', () => {
+      connected = true;
+      $('conn').textContent = '已連線'; $('conn').classList.add('ok');
+      client.subscribe(`${NS}/${encodeURIComponent(joined.room)}/+`, { qos: 0 });
+      sendPos(true);
+    });
+    const down = () => { connected = false; $('conn').textContent = '斷線，重連中…'; $('conn').classList.remove('ok'); };
+    client.on('close', down);
+    client.on('offline', down);
+    client.on('error', down);
+    client.on('message', (_topic, buf) => {
+      let s; try { s = JSON.parse(buf.toString()); } catch { return; }
+      if (!s || typeof s.id !== 'string' || s.id === myId) return;
+      if (s.leave) return removeDriver(s.id);
+      const lat = +s.lat, lng = +s.lng;
+      if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
+      upsertDriver({
+        id: s.id.slice(0, 40), name: String(s.name || '車手').slice(0, 20), color: colorFor(s.id),
+        lat, lng, speed: Math.min(500, Math.max(0, +s.speed || 0)),
+        heading: isFinite(+s.heading) && s.heading !== null ? +s.heading : null,
+        acc: +s.acc || null, updatedAt: Date.now(),
+      });
+    });
+  }
+  // 60 秒沒消息就從地圖移除
+  setInterval(() => { for (const [id, d] of drivers) if (Date.now() - d.updatedAt > 60_000) removeDriver(id); }, 10_000);
+  window.addEventListener('pagehide', () => {
+    try { if (connected) client.publish(topicOf(myId), JSON.stringify({ id: myId, leave: true })); } catch {}
+  });
+
+  // ---------- GPS ----------
+  let lastFix = null, lastSent = 0;
+  function onPosition(p) {
+    const c = p.coords, t = p.timestamp || Date.now();
+    let mps = (typeof c.speed === 'number' && c.speed >= 0) ? c.speed : null;
+    // 有些瀏覽器不給 speed：用前後兩點距離 ÷ 時間自己算
+    if (mps == null && lastFix && c.accuracy < 50) {
+      const dt = (t - lastFix.t) / 1000;
+      if (dt >= 0.5) mps = haversine(lastFix, { lat: c.latitude, lng: c.longitude }) / dt;
+    }
+    let heading = (typeof c.heading === 'number' && !isNaN(c.heading)) ? c.heading : null;
+    if (heading == null && lastFix && mps != null && mps > 2) heading = bearing(lastFix, { lat: c.latitude, lng: c.longitude });
+    lastFix = { lat: c.latitude, lng: c.longitude, t };
+
+    const kmh = mps == null ? 0 : mps * 3.6;
+    me.speed = me.speed * 0.4 + kmh * 0.6;          // 輕微平滑，避免數字亂跳
+    if (me.speed < 2) me.speed = 0;                 // 靜止時 GPS 漂移不要顯示成在動
+    me.heading = me.speed > 3 ? heading : me.heading;
+    me.acc = c.accuracy; me.updatedAt = Date.now();
+
+    const first = me.lat == null;
+    me.lat = c.latitude; me.lng = c.longitude;
+    if (first) { ensureMarker(me, true); map.setView([me.lat, me.lng], 16); }
+    else moveTo(me, me.lat, me.lng);
+    refreshIcon(me, true);
+    if (follow) map.panTo([me.lat, me.lng], { animate: true, duration: 1 });
+
+    $('mySpeed').textContent = Math.round(me.speed);
+    $('gpsInfo').textContent = `GPS 精度 ±${Math.round(c.accuracy)} m`;
+    sendPos();
+  }
+  function sendPos(force) {
+    const now = Date.now();
+    if (!force && now - lastSent < SEND_EVERY_MS) return;
+    if (!connected || me.lat == null) return;
+    lastSent = now;
+    client.publish(topicOf(myId), JSON.stringify({
+      id: myId, name: me.name, lat: +me.lat.toFixed(6), lng: +me.lng.toFixed(6),
+      speed: Math.round(me.speed * 10) / 10, heading: me.heading == null ? null : Math.round(me.heading), acc: me.acc == null ? null : Math.round(me.acc),
+    }), { qos: 0 });
+  }
+  setInterval(() => sendPos(true), 5000);   // 停著不動也定期回報，讓別人知道你還在線
+  function onGpsError(err) {
+    const msg = { 1: '沒有定位權限，請到設定允許', 2: '暫時抓不到 GPS 訊號', 3: 'GPS 逾時，重試中' }[err.code] || err.message;
+    $('gpsInfo').textContent = msg;
+  }
+
+  // ---------- 保持螢幕常亮（網頁版在背景會停止定位） ----------
+  let wakeLock = null;
+  async function keepAwake() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && joined) keepAwake(); });
+
+  // ---------- 加入 ----------
+  $('joinForm').onsubmit = (e) => {
+    e.preventDefault();
+    const name = $('nameInput').value.trim(), room = $('roomInput').value.trim().toLowerCase();
+    if (!name || !room) return;
+    if (!('geolocation' in navigator)) { $('joinErr').textContent = '這個瀏覽器不支援定位'; return; }
+    if (!window.isSecureContext) { $('joinErr').textContent = '定位需要 HTTPS 網址（localhost 除外），請看 README'; return; }
+    store.set('rl.name', name); store.set('rl.room', room);
+    joined = { name, room }; me.name = name;
+    $('roomPill').textContent = `房間：${room}`;
+    $('join').style.display = 'none';
+    navigator.geolocation.watchPosition(onPosition, onGpsError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+    keepAwake();
+    join();
+    if ($('demoInput').checked) startDemo();
+  };
+
+  // ---------- 示範模式：在自己附近放 3 台模擬車（只在本機顯示，不會上傳） ----------
+  function startDemo() {
+    const bots = ['阿明', 'Kevin', 'Amy'].map((n, i) => ({ id: 'demo-' + i, name: n + '(模擬)', r: 250 + i * 150, a: i * 2, base: 45 + i * 20 }));
+    let t = 0;
+    setInterval(() => {
+      if (me.lat == null) return;
+      t++;
+      for (const [i, b] of bots.entries()) {
+        const kmh = Math.max(5, b.base + 20 * Math.sin(t / 7 + i));
+        b.a += (kmh / 3.6) / b.r;
+        if (!b.c) b.c = { lat: me.lat, lng: me.lng };
+        const mLng = 111320 * Math.cos(b.c.lat * Math.PI / 180);
+        upsertDriver({
+          id: b.id, name: b.name, color: colorFor(b.id),
+          lat: b.c.lat + b.r * Math.sin(b.a) / 111320, lng: b.c.lng + b.r * Math.cos(b.a) / mLng,
+          speed: kmh, heading: (360 - (b.a * 180 / Math.PI) % 360) % 360, acc: 5, updatedAt: Date.now(),
+        });
+      }
+    }, 1000);
+  }
+
+  // ---------- 工具 ----------
+  function haversine(a, b) {
+    const R = 6371000, toR = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * toR, dLng = (b.lng - a.lng) * toR;
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(x));
+  }
+  function bearing(a, b) {
+    const toR = Math.PI / 180, y = Math.sin((b.lng - a.lng) * toR) * Math.cos(b.lat * toR);
+    const x = Math.cos(a.lat * toR) * Math.sin(b.lat * toR) - Math.sin(a.lat * toR) * Math.cos(b.lat * toR) * Math.cos((b.lng - a.lng) * toR);
+    return (Math.atan2(y, x) / toR + 360) % 360;
+  }
+  function fmtDist(m) { return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`; }
+  function esc(s) { return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
+})();
+</script>
+</body>
+</html>

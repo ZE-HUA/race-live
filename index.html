@@ -108,12 +108,12 @@
   #toast.show { opacity:1; }
 
   /* 紀錄清單 */
-  #sheet, #vid, #course { position:fixed; inset:0; z-index:2500; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; }
-  #sheet.hidden, #vid.hidden, #vid .hidden, #course.hidden, #course .hidden, #p2p.hidden, #pickBar.hidden { display:none; }
-  #sheet .card, #vid .card, #course .card { width:100%; max-height:80vh; overflow:auto; background:#181818; border-radius:20px 20px 0 0;
+  #sheet, #vid, #course, #search { position:fixed; inset:0; z-index:2500; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; }
+  #sheet.hidden, #vid.hidden, #vid .hidden, #course.hidden, #course .hidden, #search.hidden, #p2p.hidden, #pickBar.hidden { display:none; }
+  #sheet .card, #vid .card, #course .card, #search .card { width:100%; max-height:80vh; overflow:auto; background:#181818; border-radius:20px 20px 0 0;
     padding:16px 14px calc(env(safe-area-inset-bottom) + 16px); }
-  #sheet .head, #vid .head, #course .head { display:flex; align-items:center; margin-bottom:8px; }
-  #sheet .head b, #vid .head b, #course .head b { flex:1; font-size:18px; }
+  #sheet .head, #vid .head, #course .head, #search .head { display:flex; align-items:center; margin-bottom:8px; }
+  #sheet .head b, #vid .head b, #course .head b, #search .head b { flex:1; font-size:18px; }
   .sess { background:#232323; border-radius:14px; padding:12px; margin-bottom:10px; }
   .sess .t { font-weight:700; font-size:16px; }
   .sess .m { color:var(--muted); font-size:13px; margin:4px 0 10px; }
@@ -127,8 +127,25 @@
   #vid .opt, #course .opt { display:flex; align-items:center; gap:10px; margin:12px 0; }
   #vid .opt > span, #course .opt > span { width:64px; flex:none; color:var(--muted); font-size:14px; }
   /* 點對點計時 */
-  #course .pt { display:flex; align-items:center; gap:6px; background:#232323; border-radius:12px; padding:10px; margin:8px 0; }
-  #course .pt > div { flex:1; min-width:0; }
+  #course .pt { background:#232323; border-radius:12px; padding:10px; margin:8px 0; }
+  #course .pt small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #course .pt .pbtns { display:flex; gap:6px; margin-top:8px; }
+  #course .pt .pbtns .btn { flex:1; }
+  #course .secTitle { font-weight:700; margin:14px 0 6px; }
+  #course .saveRow { display:flex; gap:6px; }
+  #course .saveRow input, #searchForm input { flex:1; min-width:0; padding:10px 12px; border-radius:10px; border:1px solid #333; background:#1b1b1b; color:var(--fg); font-size:16px; }
+  #course .saveRow .btn { background:#333; font-size:13px; white-space:nowrap; }
+  .saved { display:flex; align-items:center; gap:8px; background:#232323; border-radius:12px; padding:9px 10px; margin-top:6px; }
+  .saved > div { flex:1; min-width:0; }
+  .saved b { display:block; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .saved small { color:var(--muted); font-size:11px; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .saved .btn { background:#333; font-size:13px; padding:7px 10px; }
+  .saved .btn.load { background:var(--accent); color:#111; font-weight:700; }
+  #searchForm { display:flex; gap:6px; margin:4px 0 8px; }
+  #searchForm .btn { background:var(--accent); color:#111; font-weight:700; }
+  .sres { display:block; width:100%; text-align:left; background:#232323; border:0; color:var(--fg); border-radius:12px; padding:10px 12px; margin-top:6px; }
+  .sres b { display:block; font-size:15px; }
+  .sres small { color:var(--muted); font-size:12px; }
   #course .pt b { display:block; font-size:15px; }
   #course .pt small { color:var(--muted); font-size:12px; }
   #course .pt .btn { background:#333; font-size:13px; padding:8px 10px; }
@@ -219,7 +236,7 @@
     #mySpeed { font-size:28px; }
     #hud .spdbox { min-width:60px; }
     #toast { top:56px; }
-    #sheet .card, #vid .card, #course .card { max-width:560px; margin:0 auto; max-height:92vh; }
+    #sheet .card, #vid .card, #course .card, #search .card { max-width:560px; margin:0 auto; max-height:92vh; }
   }
 </style>
 </head>
@@ -333,14 +350,29 @@
     <div class="head"><b>玩法設定</b><button id="courseClose" class="btn">關閉</button></div>
     <div class="opt"><span>玩法</span><div class="seg" id="modeSeg"><button data-v="free">一般</button><button data-v="p2p">🏁 點對點計時</button></div></div>
     <div id="p2pOpts">
-      <div class="pt"><div><b>🟢 起點</b><small id="ptS">未設定</small></div><button class="btn" data-pick="start">在地圖上選</button><button class="btn" data-here="start">用我的位置</button></div>
-      <div class="pt"><div><b>🏁 終點</b><small id="ptF">未設定</small></div><button class="btn" data-pick="finish">在地圖上選</button><button class="btn" data-here="finish">用我的位置</button></div>
+      <div class="pt"><div><b>🟢 起點</b><small id="ptS">未設定</small></div>
+        <div class="pbtns"><button class="btn" data-search="start">🔍 搜尋</button><button class="btn" data-pick="start">地圖點選</button><button class="btn" data-here="start">我的位置</button></div></div>
+      <div class="pt"><div><b>🏁 終點</b><small id="ptF">未設定</small></div>
+        <div class="pbtns"><button class="btn" data-search="finish">🔍 搜尋</button><button class="btn" data-pick="finish">地圖點選</button><button class="btn" data-here="finish">我的位置</button></div></div>
       <div class="opt"><span>感應範圍</span><div class="seg" id="rSeg"><button data-v="15">15 m</button><button data-v="30">30 m</button><button data-v="50">50 m</button></div></div>
       <p class="hint">離開起點圈時自動開始計時，進入終點圈時自動停止。可以重複跑，排行以每人最佳成績排序。<br>
         GPS 每秒更新一次，時間會用前後兩點內插，誤差大約零點幾秒。感應範圍太小、車速又快時，建議用 30 m 以上。換路線會清空成績。</p>
     </div>
+    <div id="savedBox" class="hidden">
+      <div class="secTitle">📁 我的路線</div>
+      <div class="saveRow"><input id="courseName" maxlength="30" placeholder="路線名稱"><button id="courseSave" class="btn">💾 儲存目前路線</button></div>
+      <div id="savedList"></div>
+    </div>
     <p id="freeHint" class="hint">一般模式：大家自由移動，排行依即時車速排序。</p>
     <button id="courseApply" class="bigbtn">套用到房間</button>
+  </div>
+</div>
+<div id="search" class="hidden">
+  <div class="card">
+    <div class="head"><b id="searchTitle">搜尋起點</b><button id="searchClose" class="btn">取消</button></div>
+    <form id="searchForm"><input id="searchInput" type="search" enterkeyhint="search" autocomplete="off" placeholder="地名或地址，例如：大鵬灣國際賽車場"><button class="btn" type="submit">搜尋</button></form>
+    <div id="searchList"></div>
+    <p class="hint">搜尋資料來自 OpenStreetMap 與 Mapbox。</p>
   </div>
 </div>
 <div id="pickBar" class="hidden"><span id="pickText">點地圖設定起點</span><button id="pickCancel" class="btn">取消</button></div>
@@ -1996,7 +2028,7 @@
       const keep = mine && id && mine.courseId === id;
       Object.assign(run, { state: 'ready', startT: 0, startLocal: 0, prev: null, courseId: id, doneAt: 0,
         best: keep ? mine.best : null, last: keep ? mine.last : null, attempts: keep ? mine.attempts || 0 : 0 });
-      if (c && !keep && !amHost) toast('房主設定了點對點路線，經過起點就會自動開始計時');
+      if (c && !keep && !amHost) toast(`房主設定了路線${c.name ? '「' + c.name + '」' : ''}，經過起點就會自動開始計時`);
     }
     map.setCourse(draftShown ? draftCourse() : c);
     $('modeBtn').textContent = c ? '🏁 計時' : '一般';
@@ -2109,13 +2141,18 @@
   $('modeBtn').onclick = () => {
     if (!joined || !roomDecided) return;
     if (!amHost) {
-      toast(courseOf() ? '目前玩法：點對點計時（由房主設定）' : '目前是一般模式，只有房主可以切換玩法');
+      const c = courseOf();
+      if (!c) { toast('目前是一般模式，只有房主可以切換玩法'); return; }
+      if (confirm(`目前玩法：點對點計時${c.name ? '「' + c.name + '」' : ''}（由房主設定）。\n要把這條路線存到你的手機，之後自己當房主時使用嗎？`)) {
+        saveCourse({ name: c.name || defaultCourseName(c), start: c.start, finish: c.finish, r: c.r });
+      }
       return;
     }
     // 還沒套用的設定會保留（例如先在起點按「用我的位置」，關掉視窗開到終點再設定）
     if (!draft) {
       const c = room.course;
-      draft = { mode: room.mode === 'p2p' ? 'p2p' : 'free', start: c ? c.start : null, finish: c ? c.finish : null, r: c ? c.r : 30 };
+      draft = { mode: room.mode === 'p2p' ? 'p2p' : 'free', start: c ? c.start : null, finish: c ? c.finish : null, r: c ? c.r : 30,
+        name: c && c.name ? c.name : null, loadedName: c && c.name ? c.name : null };
     }
     draftShown = true; renderCourseDlg(); map.setCourse(draftCourse());
     $('course').classList.remove('hidden');
@@ -2125,7 +2162,11 @@
     $('rSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === draft.r));
     $('p2pOpts').classList.toggle('hidden', draft.mode !== 'p2p');
     $('freeHint').classList.toggle('hidden', draft.mode === 'p2p');
-    const desc = (pt) => !pt ? '未設定' : me.lat != null ? `已設定 · 離你 ${fmtDist(haversine(me, pt))}` : '已設定';
+    $('savedBox').classList.toggle('hidden', draft.mode !== 'p2p');
+    $('courseSave').disabled = !(draft.start && draft.finish);
+    if (!$('courseName').matches(':focus')) $('courseName').value = draft.name || '';
+    renderSaved();
+    const desc = (pt) => !pt ? '未設定' : [pt.name || '已設定', me.lat != null ? `離你 ${fmtDist(haversine(me, pt))}` : ''].filter(Boolean).join(' · ');
     $('ptS').textContent = desc(draft.start); $('ptF').textContent = desc(draft.finish);
     let warn = '';
     if (draft.mode === 'p2p' && draft.start && draft.finish && haversine(draft.start, draft.finish) < draft.r * 2) warn = '（起點和終點太近）';
@@ -2139,8 +2180,9 @@
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.here) {
       if (me.lat == null) { toast('還沒有 GPS 位置'); return; }
-      draft[b.dataset.here] = { lat: +me.lat.toFixed(6), lng: +me.lng.toFixed(6) };
-      renderCourseDlg(); map.setCourse(draftCourse());
+      setDraftPoint(b.dataset.here, { lat: +me.lat.toFixed(6), lng: +me.lng.toFixed(6) });
+    } else if (b.dataset.search) {
+      openSearch(b.dataset.search);
     } else if (b.dataset.pick) {
       pickTarget = b.dataset.pick;
       $('pickText').textContent = `點地圖設定${pickTarget === 'start' ? '起點' : '終點'}`;
@@ -2148,12 +2190,113 @@
       follow = false; $('followBtn').classList.remove('on');
     }
   };
+  // ---------- 起終點：搜尋地點、自動查路名 ----------
+  function setDraftPoint(key, pt) {
+    draft[key] = pt; draft.name = draft.name && draft.loadedName === draft.name ? null : draft.name;   // 改了點，載入的路線名稱就不再適用
+    renderCourseDlg(); map.setCourse(draftCourse());
+    if (!pt.name) reverseName(pt.lat, pt.lng).then(n => {
+      if (n && draft && draft[key] && draft[key].lat === pt.lat && draft[key].lng === pt.lng) { draft[key].name = n; renderCourseDlg(); }
+    });
+  }
+  function nomName(x) {
+    const a = x.address || {};
+    const area = [a.state || a.county || a.city, a.town || a.city_district || a.district || a.suburb, a.road].filter(Boolean);
+    return { name: x.name || a.road || (x.display_name || '').split(',')[0], addr: [...new Set(area)].join('') };
+  }
+  async function reverseName(lat, lng) {
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&addressdetails=1&accept-language=zh-TW&lat=${lat}&lon=${lng}`);
+      const x = await r.json(); const n = nomName(x);
+      return n.name || n.addr || null;
+    } catch { return null; }
+  }
+  let searchTarget = null, searchSeq = 0;
+  function openSearch(target) {
+    searchTarget = target;
+    $('searchTitle').textContent = `搜尋${target === 'start' ? '起點' : '終點'}`;
+    $('searchList').innerHTML = '';
+    $('course').classList.add('hidden'); $('search').classList.remove('hidden');
+    setTimeout(() => $('searchInput').focus(), 50);
+  }
+  function closeSearch() { $('search').classList.add('hidden'); $('course').classList.remove('hidden'); }
+  $('searchClose').onclick = closeSearch;
+  $('searchForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const q = $('searchInput').value.trim(); if (!q) return;
+    const seq = ++searchSeq;
+    $('searchList').innerHTML = '<p class="hint">搜尋中…</p>';
+    const near = me.lat != null ? me : null;
+    // OpenStreetMap 找地標比較準；Mapbox 找地址比較準 → 兩邊一起查再合併
+    const osm = fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=8&countrycodes=tw&accept-language=zh-TW&q=${encodeURIComponent(q)}`)
+      .then(r => r.json()).then(a => a.map(x => ({ lat: +x.lat, lng: +x.lon, ...nomName(x) }))).catch(() => []);
+    const mb = MAPBOX_TOKEN ? fetch(`https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}&language=zh-Hant&country=tw&limit=5` +
+        (near ? `&proximity=${near.lng},${near.lat}` : '') + `&access_token=${MAPBOX_TOKEN}`)
+      .then(r => r.json()).then(d => (d.features || []).map(f => ({ lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0],
+        name: f.properties.name, addr: f.properties.place_formatted || f.properties.full_address || '' }))).catch(() => []) : Promise.resolve([]);
+    const [a, b] = await Promise.all([osm, mb]);
+    if (seq !== searchSeq) return;
+    const out = [];
+    for (const x of [...a, ...b]) if (!out.some(y => haversine(x, y) < 80)) out.push(x);
+    if (!out.length) { $('searchList').innerHTML = '<p class="hint">找不到結果，換個關鍵字試試，或改用「地圖點選」。</p>'; return; }
+    searchResults = out.slice(0, 10);
+    $('searchList').innerHTML = searchResults.map((x, i) => `<button class="sres" data-i="${i}"><b>${esc(x.name || '（未命名）')}</b>
+      <small>${esc(x.addr || '')}${near ? `${x.addr ? ' · ' : ''}離你 ${fmtDist(haversine(near, x))}` : ''}</small></button>`).join('');
+  };
+  let searchResults = [];
+  $('searchList').onclick = (e) => {
+    const b = e.target.closest('.sres'); if (!b) return;
+    const x = searchResults[+b.dataset.i]; if (!x) return;
+    closeSearch();
+    setDraftPoint(searchTarget, { lat: +x.lat.toFixed(6), lng: +x.lng.toFixed(6), name: x.name || null });
+    map.setView(x.lat, x.lng, 16);
+  };
+
+  // ---------- 我的路線（存在這支手機） ----------
+  const loadSaved = () => { try { return JSON.parse(store.get('rl.courses') || '[]'); } catch { return []; } };
+  const defaultCourseName = (c) => `${(c.start && c.start.name) || '起點'} → ${(c.finish && c.finish.name) || '終點'}`;
+  function saveCourse(c) {
+    const list = loadSaved(), name = (c.name || defaultCourseName(c)).slice(0, 30);
+    const i = list.findIndex(x => x.name === name);
+    if (i >= 0 && !confirm(`已經有叫「${name}」的路線，要覆蓋嗎？`)) return false;
+    const item = { id: i >= 0 ? list[i].id : 's' + Date.now().toString(36), name, start: c.start, finish: c.finish, r: c.r, savedAt: Date.now() };
+    if (i >= 0) list.splice(i, 1);
+    list.unshift(item);
+    store.set('rl.courses', JSON.stringify(list.slice(0, 50)));
+    toast(`已儲存路線「${name}」`);
+    return true;
+  }
+  function renderSaved() {
+    const list = loadSaved();
+    $('savedList').innerHTML = list.length ? list.map(c => `<div class="saved" data-id="${esc(c.id)}"><div><b>${esc(c.name)}</b>
+      <small>${esc((c.start && c.start.name) || '起點')} → ${esc((c.finish && c.finish.name) || '終點')} · 直線 ${fmtDist(haversine(c.start, c.finish))} · 感應 ${c.r} m</small></div>
+      <button class="btn load" data-act="load">載入</button><button class="btn" data-act="del">🗑</button></div>`).join('')
+      : '<p class="hint">還沒有儲存的路線。設定好起點和終點後，按「儲存目前路線」。</p>';
+  }
+  $('courseSave').onclick = () => {
+    if (!draft || !draft.start || !draft.finish) { toast('請先設定起點和終點'); return; }
+    const name = $('courseName').value.trim() || defaultCourseName(draft);
+    if (saveCourse({ name, start: draft.start, finish: draft.finish, r: draft.r })) { draft.name = name; draft.loadedName = name; renderCourseDlg(); }
+  };
+  $('courseName').oninput = () => { if (draft) draft.name = $('courseName').value.trim() || null; };
+  $('savedList').onclick = (e) => {
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    const id = b.closest('.saved').dataset.id, list = loadSaved(), c = list.find(x => x.id === id); if (!c) return;
+    if (b.dataset.act === 'del') {
+      if (!confirm(`刪除路線「${c.name}」？`)) return;
+      store.set('rl.courses', JSON.stringify(list.filter(x => x.id !== id))); renderSaved(); return;
+    }
+    Object.assign(draft, { mode: 'p2p', start: c.start, finish: c.finish, r: c.r, name: c.name, loadedName: c.name });
+    renderCourseDlg(); map.setCourse(draftCourse());
+    map.fitBounds([[c.start.lat, c.start.lng], [c.finish.lat, c.finish.lng]]);
+    toast(`已載入「${c.name}」，按「套用到房間」生效`);
+  };
+
   function endPick() { pickTarget = null; $('pickBar').classList.add('hidden'); document.body.classList.remove('picking'); $('course').classList.remove('hidden'); }
   $('pickCancel').onclick = endPick;
   map.onMapClick((lat, lng) => {
     if (!pickTarget) return;
-    draft[pickTarget] = { lat: +lat.toFixed(6), lng: +lng.toFixed(6) };
-    endPick(); renderCourseDlg(); map.setCourse(draftCourse());
+    const target = pickTarget;
+    endPick(); setDraftPoint(target, { lat: +lat.toFixed(6), lng: +lng.toFixed(6) });
   });
   function closeCourse() { draftShown = false; $('course').classList.add('hidden'); applyRoomMode(); }
   $('courseClose').onclick = closeCourse;
@@ -2162,7 +2305,8 @@
     if (draft.mode === 'p2p') {
       const old = room.course, same = old && room.mode === 'p2p' && old.r === draft.r &&
         JSON.stringify([old.start, old.finish]) === JSON.stringify([draft.start, draft.finish]);
-      room.course = { id: same ? old.id : 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: draft.start, finish: draft.finish, r: draft.r };
+      room.course = { id: same ? old.id : 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: draft.start, finish: draft.finish, r: draft.r,
+        name: ($('courseName').value || '').trim() || draft.name || null };
       room.mode = 'p2p';
       toast(same ? '路線沒有變動' : '已套用點對點路線，經過起點就會自動開始計時');
     } else {

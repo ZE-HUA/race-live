@@ -161,17 +161,24 @@
   .row.stale { opacity:.45; }
 
   /* 地圖上的車子標記 */
-  .car { position:relative; width:0; height:0; }
-  .car .arrow { position:absolute; left:-13px; top:-13px; width:26px; height:26px; border-radius:50%;
-    background:var(--c); border:3px solid #fff; box-shadow:0 1px 6px rgba(0,0,0,.5);
+  .car { position:relative; width:0; height:0; --r:10px; }
+  .car .arrow { position:absolute; left:calc(-1 * var(--r)); top:calc(-1 * var(--r)); width:calc(2 * var(--r)); height:calc(2 * var(--r));
+    box-sizing:border-box; border-radius:50%; background:var(--c); border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5);
     display:flex; align-items:center; justify-content:center; }
-  .car .arrow svg { width:16px; height:16px; display:block; }
+  .car .arrow svg { width:12px; height:12px; display:block; }
   .car.noheading .arrow svg { display:none; }
-  .car .tag { position:absolute; left:16px; top:-30px; background:var(--c); color:#fff; padding:3px 8px;
-    border-radius:8px; font-size:12px; font-weight:600; white-space:nowrap; box-shadow:0 1px 4px rgba(0,0,0,.4);
+  .car.me { --r:12px; }
+  .car.me .arrow { border-color:var(--accent); border-width:3px; }
+  /* 標籤：預設右上；會撞到別人時改到左上／右下／左下，再不行只留車速，最後才隱藏 */
+  .car .tag { position:absolute; left:calc(var(--r) + 2px); bottom:3px; background:var(--c); color:#fff; padding:1px 5px;
+    border-radius:6px; font-size:10px; font-weight:600; line-height:16px; white-space:nowrap; box-shadow:0 1px 3px rgba(0,0,0,.4);
     font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif; }
-  .car .tag b { font-size:14px; margin-left:4px; font-variant-numeric:tabular-nums; }
-  .car.me .arrow { width:30px; height:30px; left:-15px; top:-15px; border-color:var(--accent); }
+  .car .tag b { font-size:12px; margin-left:3px; font-variant-numeric:tabular-nums; }
+  .car.tp-l .tag { left:auto; right:calc(var(--r) + 2px); }
+  .car.tp-d .tag { bottom:auto; top:3px; }
+  .car.tp-c .tag .nm { display:none; }
+  .car.tp-c .tag b { margin-left:0; }
+  .car.tp-h .tag { visibility:hidden; }
   .car.stale { opacity:.45; }
   .leaflet-div-icon { background:none; border:0; }
 
@@ -434,7 +441,7 @@
     const rot = d.heading == null ? 0 : d.heading;
     return `<div class="${cls}" style="--c:${d.color}">
       <div class="arrow" style="transform:rotate(${rot}deg)"><svg viewBox="0 0 24 24"><path d="M12 2 L20 21 L12 16.5 L4 21 Z" fill="#fff"/></svg></div>
-      <div class="tag">${(isMe ? amHost : (extra !== 'rp' && room && d.id === room.host)) ? '👑 ' : ''}${esc(isMe ? '我' : d.name)}<b>${Math.round(d.speed || 0)}</b></div></div>`;
+      <div class="tag"><span class="nm">${(isMe ? amHost : (extra !== 'rp' && room && d.id === room.host)) ? '👑 ' : ''}${esc(isMe ? '我' : d.name)}</span><b>${Math.round(d.speed || 0)}</b></div></div>`;
   }
   function ensureMarker(d, isMe) {
     if (!d.marker) {
@@ -444,7 +451,7 @@
   }
   function refreshIcon(d, isMe) {
     const el = d.marker && d.marker.el;
-    if (el) el.innerHTML = carHtml(d, isMe);
+    if (el) setCarHtml(el, carHtml(d, isMe));
   }
   // 每次收到新座標，用 ~1 秒把標記滑過去，看起來不會一格一格跳
   function moveTo(d, lat, lng) {
@@ -493,6 +500,51 @@
     if (last && now - last[2] < 1000) return;
     a.push([lat, lng, now]); if (a.length > 1800) a.splice(0, a.length - 1800);
   }
+
+  // ---------- 標籤閃避：每 0.25 秒依畫面上的位置重新安排，避免互相遮住 ----------
+  const TP = ['tp-l', 'tp-d', 'tp-c', 'tp-h'];
+  function setCarHtml(el, html) {
+    el.innerHTML = html;
+    const car = el.firstElementChild, tp = el.dataset.tp;
+    if (car && tp) car.classList.add(...tp.split(' '));
+  }
+  function layoutTags() {
+    const cars = [...document.querySelectorAll('#map .car')].filter(c => c.getClientRects().length && getComputedStyle(c).display !== 'none');
+    if (!cars.length) return;
+    const items = cars.map(c => {
+      const a = c.querySelector('.arrow').getBoundingClientRect();
+      return { c, x: a.left + a.width / 2, y: a.top + a.height / 2, r: a.width / 2,
+        pri: c.classList.contains('me') ? 0 : c.classList.contains('stale') ? 2 : 1 };
+    });
+    items.sort((p, q) => p.pri - q.pri || p.y - q.y);
+    const placed = [];   // 已經放好的標籤
+    const hit = (b, self) => placed.some(o => b.x1 < o.x2 && b.x2 > o.x1 && b.y1 < o.y2 && b.y2 > o.y1) ||
+      items.some(o => o !== self && b.x1 < o.x + o.r && b.x2 > o.x - o.r && b.y1 < o.y + o.r && b.y2 > o.y - o.r);
+    for (const it of items) {
+      const c = it.c, tag = c.querySelector('.tag'); if (!tag) continue;
+      c.classList.remove(...TP);
+      const full = { w: tag.offsetWidth, h: tag.offsetHeight };
+      c.classList.add('tp-c');
+      const comp = { w: tag.offsetWidth, h: tag.offsetHeight };
+      c.classList.remove('tp-c');
+      const off = it.r + 2;
+      let chosen = null;
+      for (const [size, compact] of [[full, false], [comp, true]]) {
+        for (const pos of ['', 'tp-l', 'tp-d', 'tp-l tp-d']) {
+          const left = pos.includes('tp-l'), down = pos.includes('tp-d');
+          const b = { x1: left ? it.x - off - size.w : it.x + off, y1: down ? it.y + 3 : it.y - 3 - size.h };
+          b.x2 = b.x1 + size.w; b.y2 = b.y1 + size.h;
+          if (!hit(b, it)) { chosen = { cls: (pos + (compact ? ' tp-c' : '')).trim(), b }; break; }
+        }
+        if (chosen) break;
+      }
+      const cls = chosen ? chosen.cls : 'tp-h';
+      if (chosen) placed.push(chosen.b);
+      if (cls) c.classList.add(...cls.split(' '));
+      c.parentElement.dataset.tp = cls;
+    }
+  }
+  setInterval(layoutTags, 250);
 
   // ---------- 排行列表 ----------
   function renderList() {
@@ -1125,7 +1177,7 @@
       if (el) el.style.display = '';
       mk.setPos(s.lat, s.lng);
       if (ui && el) {
-        el.innerHTML = carHtml({ name: tr.name, color: tr.color, speed: s.spd, heading: s.hdg, updatedAt: s.stale ? 0 : Date.now() }, false, 'rp');
+        setCarHtml(el, carHtml({ name: tr.name, color: tr.color, speed: s.spd, heading: s.hdg, updatedAt: s.stale ? 0 : Date.now() }, false, 'rp'));
       }
       rows.push({ tr, s });
       if (rp.follow === tr.id && ui) map.panTo(s.lat, s.lng);

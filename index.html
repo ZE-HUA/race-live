@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#111">
 <title>Race Live 多人即時位置</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css">
 <style>
   :root { --bg:#111; --fg:#f5f5f5; --muted:#9a9a9a; --card:rgba(20,20,20,.88); --accent:#ffcc00; }
   * { box-sizing:border-box; }
@@ -35,7 +36,9 @@
   #conn::before { content:"●"; margin-right:6px; color:#ff6b6b; }
   #conn.ok::before { color:#3cdc6c; }
   #top .spacer { flex:1; }
-  .btn { pointer-events:auto; border:0; background:var(--card); color:var(--fg); border-radius:999px;
+  #roomPill { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  #conn { flex:none; }
+  .btn { white-space:nowrap; flex:none; pointer-events:auto; border:0; background:var(--card); color:var(--fg); border-radius:999px;
     padding:8px 12px; font-size:13px; backdrop-filter:blur(8px); }
   .btn.on { background:var(--accent); color:#111; }
 
@@ -97,6 +100,7 @@
   <div class="spacer"></div>
   <button id="followBtn" class="btn on">跟隨我</button>
   <button id="fitBtn" class="btn">全部</button>
+  <button id="styleBtn" class="btn" style="display:none">街道</button>
 </div>
 
 <div id="bottom">
@@ -108,6 +112,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script>
 (() => {
@@ -125,21 +130,78 @@
   $('nameInput').value = store.get('rl.name') || '';
   $('roomInput').value = new URLSearchParams(location.search).get('room') || store.get('rl.room') || '';
 
-  // ---------- 地圖 ----------
-  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView([25.0330, 121.5654], 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '&copy; OpenStreetMap',
-  }).addTo(map);
+  // ---------- 地圖：有 Mapbox token 用 Mapbox，否則退回 OpenStreetMap ----------
+  const MAPBOX_TOKEN = '';
+  const STYLES = [
+    { name: '街道', url: 'mapbox://styles/mapbox/streets-v12' },
+    { name: '深色', url: 'mapbox://styles/mapbox/dark-v11' },
+    { name: '衛星', url: 'mapbox://styles/mapbox/satellite-streets-v12' },
+  ];
+  const START = [25.0330, 121.5654];
+  const useMapbox = !!(MAPBOX_TOKEN && window.mapboxgl);
+  const map = useMapbox ? makeMapbox() : makeLeaflet();
+
+  function makeMapbox() {
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+    let styleIdx = Math.min(+(store.get('rl.style') || 0), STYLES.length - 1) || 0;
+    const m = new mapboxgl.Map({
+      container: 'map', style: STYLES[styleIdx].url, center: [START[1], START[0]], zoom: 15,
+      pitchWithRotate: false, dragRotate: false, attributionControl: true,
+    });
+    m.touchZoomRotate.disableRotation();   // 地圖固定北朝上，箭頭方向才會對
+    $('styleBtn').style.display = '';
+    $('styleBtn').textContent = STYLES[styleIdx].name;
+    $('styleBtn').onclick = () => {
+      styleIdx = (styleIdx + 1) % STYLES.length;
+      m.setStyle(STYLES[styleIdx].url, { diff: false });
+      $('styleBtn').textContent = STYLES[styleIdx].name;
+      store.set('rl.style', String(styleIdx));
+    };
+    return {
+      setView: (lat, lng, z) => m.jumpTo({ center: [lng, lat], zoom: z }),
+      panTo: (lat, lng) => m.easeTo({ center: [lng, lat], duration: 1000, easing: t => t }),
+      getZoom: () => m.getZoom(),
+      fitBounds(pts) {
+        if (pts.length === 1) return m.easeTo({ center: [pts[0][1], pts[0][0]], zoom: 16 });
+        const b = new mapboxgl.LngLatBounds();
+        pts.forEach(p => b.extend([p[1], p[0]]));
+        m.fitBounds(b, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, maxZoom: 17, duration: 800 });
+      },
+      onUserDrag: (fn) => m.on('dragstart', fn),
+      addMarker(lat, lng, html, isMe) {
+        const el = document.createElement('div');
+        el.innerHTML = html;
+        if (isMe) el.style.zIndex = '10';
+        const mk = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([lng, lat]).addTo(m);
+        return { el, setPos: (a, b) => mk.setLngLat([b, a]), remove: () => mk.remove() };
+      },
+    };
+  }
+  function makeLeaflet() {
+    const m = L.map('map', { zoomControl: false }).setView(START, 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+    return {
+      setView: (lat, lng, z) => m.setView([lat, lng], z),
+      panTo: (lat, lng) => m.panTo([lat, lng], { animate: true, duration: 1 }),
+      getZoom: () => m.getZoom(),
+      fitBounds: (pts) => m.fitBounds(pts, { padding: [60, 60], maxZoom: 17 }),
+      onUserDrag: (fn) => m.on('dragstart', fn),
+      addMarker(lat, lng, html, isMe) {
+        const mk = L.marker([lat, lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }), zIndexOffset: isMe ? 1000 : 0 }).addTo(m);
+        return { get el() { return mk.getElement(); }, setPos: (a, b) => mk.setLatLng([a, b]), remove: () => m.removeLayer(mk) };
+      },
+    };
+  }
 
   let follow = true;
-  $('followBtn').onclick = () => { follow = !follow; $('followBtn').classList.toggle('on', follow); if (follow && me.lat) map.panTo([me.lat, me.lng]); };
+  $('followBtn').onclick = () => { follow = !follow; $('followBtn').classList.toggle('on', follow); if (follow && me.lat) map.panTo(me.lat, me.lng); };
   $('fitBtn').onclick = () => {
     follow = false; $('followBtn').classList.remove('on');
     const pts = [...drivers.values()].filter(d => d.lat != null).map(d => [d.lat, d.lng]);
     if (me.lat != null) pts.push([me.lat, me.lng]);
-    if (pts.length) map.fitBounds(pts, { padding: [60, 60], maxZoom: 17 });
+    if (pts.length) map.fitBounds(pts);
   };
-  map.on('dragstart', () => { follow = false; $('followBtn').classList.remove('on'); });
+  map.onUserDrag(() => { follow = false; $('followBtn').classList.remove('on'); });
 
   // ---------- 車子標記（含平滑移動） ----------
   const drivers = new Map();   // 其他車手
@@ -155,15 +217,12 @@
   }
   function ensureMarker(d, isMe) {
     if (!d.marker) {
-      d.marker = L.marker([d.lat, d.lng], {
-        icon: L.divIcon({ className: '', html: carHtml(d, isMe), iconSize: [0, 0] }),
-        zIndexOffset: isMe ? 1000 : 0,
-      }).addTo(map);
+      d.marker = map.addMarker(d.lat, d.lng, carHtml(d, isMe), isMe);
       d.shown = { lat: d.lat, lng: d.lng };
     }
   }
   function refreshIcon(d, isMe) {
-    const el = d.marker && d.marker.getElement();
+    const el = d.marker && d.marker.el;
     if (el) el.innerHTML = carHtml(d, isMe);
   }
   // 每次收到新座標，用 ~1 秒把標記滑過去，看起來不會一格一格跳
@@ -177,7 +236,7 @@
       if (!d.marker || !d.to) continue;
       const k = Math.min(1, (now - d.animStart) / 1000);
       d.shown = { lat: d.from.lat + (d.to.lat - d.from.lat) * k, lng: d.from.lng + (d.to.lng - d.from.lng) * k };
-      d.marker.setLatLng([d.shown.lat, d.shown.lng]);
+      d.marker.setPos(d.shown.lat, d.shown.lng);
     }
     requestAnimationFrame(animate);
   }
@@ -195,7 +254,7 @@
   }
   function removeDriver(id) {
     const d = drivers.get(id);
-    if (d && d.marker) map.removeLayer(d.marker);
+    if (d && d.marker) d.marker.remove();
     drivers.delete(id);
     renderList();
   }
@@ -218,7 +277,7 @@
     const row = e.target.closest('.row'); if (!row) return;
     const d = drivers.get(row.dataset.id); if (!d) return;
     follow = false; $('followBtn').classList.remove('on');
-    map.setView([d.lat, d.lng], Math.max(map.getZoom(), 16));
+    map.setView(d.lat, d.lng, Math.max(map.getZoom(), 16));
   };
   setInterval(() => { for (const d of drivers.values()) refreshIcon(d, false); renderList(); }, 2000);
 
@@ -292,10 +351,10 @@
 
     const first = me.lat == null;
     me.lat = c.latitude; me.lng = c.longitude;
-    if (first) { ensureMarker(me, true); map.setView([me.lat, me.lng], 16); }
+    if (first) { ensureMarker(me, true); map.setView(me.lat, me.lng, 16); }
     else moveTo(me, me.lat, me.lng);
     refreshIcon(me, true);
-    if (follow) map.panTo([me.lat, me.lng], { animate: true, duration: 1 });
+    if (follow) map.panTo(me.lat, me.lng);
 
     $('mySpeed').textContent = Math.round(me.speed);
     $('gpsInfo').textContent = `GPS 精度 ±${Math.round(c.accuracy)} m`;

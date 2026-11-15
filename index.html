@@ -165,6 +165,7 @@
   <form id="joinForm">
     <h1>Race <span>Live</span></h1>
     <p>同一個房間代碼的人，會在地圖上即時看到彼此的位置和車速。<br>
+      第一個進入房間的人是房主 👑，只有房主能開始／停止記錄；房主離開後房間就結束。<br>
       位置經由公開伺服器傳送，知道房間代碼的人都看得到，代碼請取得難猜一點。</p>
     <label>你的名字<input id="nameInput" maxlength="20" placeholder="例如：Tommy" required></label>
     <label>房間代碼<input id="roomInput" maxlength="32" placeholder="例如：test" required></label>
@@ -381,7 +382,7 @@
     const rot = d.heading == null ? 0 : d.heading;
     return `<div class="${cls}" style="--c:${d.color}">
       <div class="arrow" style="transform:rotate(${rot}deg)"><svg viewBox="0 0 24 24"><path d="M12 2 L20 21 L12 16.5 L4 21 Z" fill="#fff"/></svg></div>
-      <div class="tag">${esc(isMe ? '我' : d.name)}<b>${Math.round(d.speed || 0)}</b></div></div>`;
+      <div class="tag">${(isMe ? amHost : (extra !== 'rp' && room && d.id === room.host)) ? '👑 ' : ''}${esc(isMe ? '我' : d.name)}<b>${Math.round(d.speed || 0)}</b></div></div>`;
   }
   function ensureMarker(d, isMe) {
     if (!d.marker) {
@@ -413,7 +414,10 @@
   function upsertDriver(s) {
     if (s.id === myId) return;
     let d = drivers.get(s.id);
-    if (!d) { d = { ...s }; drivers.set(s.id, d); }
+    if (!d) {
+      d = { ...s }; drivers.set(s.id, d);
+      if (!String(s.id).startsWith('demo-')) setTimeout(() => sendPos(true), 150);   // 有新人加入 → 馬上回報一次，讓他立刻看到我
+    }
     else Object.assign(d, s);
     if (d.lat == null) return renderList();
     recordPoint(d);
@@ -437,7 +441,7 @@
       const dist = me.lat != null ? fmtDist(haversine(me, d)) : '';
       return `<div class="row ${stale ? 'stale' : ''}" data-id="${esc(d.id)}">
         <span class="dot" style="background:${d.color}"></span>
-        <span class="name">${esc(d.name)}<small>${stale ? '訊號中斷' : dist}</small></span>
+        <span class="name">${room && d.id === room.host ? '👑 ' : ''}${esc(d.name)}<small>${stale ? '訊號中斷' : dist}</small></span>
         <span class="spd">${Math.round(d.speed || 0)} km/h</span></div>`;
     }).join('');
     $('countInfo').innerHTML = `<b>${drivers.size + 1} 人</b> ${document.body.classList.contains('list-collapsed') ? '▸' : '▾'}`;
@@ -463,7 +467,8 @@
   const topicOf = (id) => `${NS}/${encodeURIComponent(joined.room)}/${id}`;
   function join() {
     if (!joined || client) return;
-    ctlFirst = true;
+    ctlFirst = true; roomDecided = false; amHost = false; room = null;
+    $('conn').textContent = '確認房間中…';
     const c = client = mqtt.connect(BROKER, {
       clientId: 'rl-' + myId + '-' + Math.random().toString(36).slice(2, 6),
       clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 10000,
@@ -473,8 +478,11 @@
       if (client !== c) return;
       connected = true;
       $('conn').textContent = '已連線'; $('conn').classList.add('ok');
-      client.subscribe(`${NS}/${encodeURIComponent(joined.room)}/+`, { qos: 0 });
+      client.subscribe(`${NS}/${encodeURIComponent(joined.room)}/+`, { qos: 1 });
       sendPos(true);
+      // 等 1.5 秒看有沒有收到房間資訊（retained）；沒有的話我就是第一個人 → 成為房主
+      if (!roomDecided) { clearTimeout(decideTimer); decideTimer = setTimeout(() => { if (client === c && !roomDecided) decideRoom(null); }, 1500); }
+      else if (amHost) publishRoom();
       if (rec) publishCtl();
     });
     const down = () => { if (client !== c) return; connected = false; $('conn').textContent = '斷線，重連中…'; $('conn').classList.remove('ok'); };
@@ -484,9 +492,15 @@
     c.on('message', (topic, buf) => {
       if (client !== c) return;
       if (topic === ctlTopic()) { let cm = null; try { cm = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onCtl(cm); }
+      if (topic === roomTopic()) { let rm = null; try { rm = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onRoom(rm); }
       let s; try { s = JSON.parse(buf.toString()); } catch { return; }
       if (!s || typeof s.id !== 'string' || s.id === myId) return;
-      if (s.leave) return removeDriver(s.id);
+      if (room && s.id === room.host) { lastHostSeen = Date.now(); if (!s.leave) cancelHostGone(); }
+      if (s.leave) {
+        removeDriver(s.id);
+        if (!amHost && room && s.id === room.host) hostGone();   // 房主斷線/關掉網頁 → 等寬限期
+        return;
+      }
       const lat = +s.lat, lng = +s.lng;
       if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
       upsertDriver({
@@ -497,8 +511,86 @@
       });
     });
   }
-  // 60 秒沒消息就從地圖移除
-  setInterval(() => { for (const [id, d] of drivers) if (Date.now() - d.updatedAt > 60_000) removeDriver(id); }, 10_000);
+  // 30 秒沒消息就從地圖移除（正常離開會立刻消失；這是給斷線沒通知的情況）
+  setInterval(() => { for (const [id, d] of drivers) if (Date.now() - d.updatedAt > 30_000) removeDriver(id); }, 5_000);
+
+  // =====================================================================
+  // 房主：第一個進入房間的人。只有房主能開始/停止記錄；房主離開 → 房間結束
+  // 房間資訊用 retained 訊息存在 _room，房主每 10 秒更新一次（心跳）
+  // =====================================================================
+  const ROOM_ALIVE_MS = 45_000;     // 房主超過 45 秒沒心跳 → 視為不在
+  const HOST_GRACE_MS = 20_000;     // 房主斷線後等 20 秒（重新整理、短暫斷網）再結束房間
+  let room = null, amHost = false, roomDecided = false, decideTimer = null;
+  let hostGoneTimer = null, lastHostSeen = 0;
+  const roomTopic = () => joined ? `${NS}/${encodeURIComponent(joined.room)}/_room` : '';
+
+  function publishRoom() {
+    if (!connected || !amHost || !room) return;
+    room.at = Date.now(); room.hostName = me.name;
+    client.publish(roomTopic(), JSON.stringify(room), { qos: 1, retain: true });
+  }
+  setInterval(() => { if (amHost) publishRoom(); }, 10_000);
+
+  function onRoom(m) {
+    const alive = !!(m && m.state === 'open' && m.host && Date.now() - (m.at || 0) < ROOM_ALIVE_MS);
+    if (!roomDecided) { clearTimeout(decideTimer); return decideRoom(alive ? m : null); }
+    if (m && m.state === 'closed') {
+      if (!amHost && room && m.host === room.host) roomEnded(`房主 ${room.hostName || ''} 已離開，房間結束`);
+      return;
+    }
+    if (!alive) return;
+    if (amHost) {
+      if (m.host === myId) return;   // 自己的回音
+      // 兩個人幾乎同時建立：比較早建立的人當房主
+      const theyWin = m.createdAt < room.createdAt || (m.createdAt === room.createdAt && m.host < myId);
+      if (theyWin) becomePlayer(m); else publishRoom();
+      return;
+    }
+    room = m; lastHostSeen = Date.now(); cancelHostGone(); renderRole();
+  }
+  function decideRoom(m) {
+    roomDecided = true;
+    if (m && m.host !== myId) {
+      amHost = false; room = m; lastHostSeen = Date.now();
+      toast(`已加入房間，房主是 ${m.hostName || '?'}`);
+    } else {
+      const resume = !!(m && m.host === myId);   // 我原本就是房主（例如重新整理）
+      amHost = true;
+      room = { state: 'open', host: myId, hostName: me.name, createdAt: resume ? m.createdAt : Date.now() };
+      publishRoom();
+      if (!resume) { ctl = { state: 'idle' }; client.publish(ctlTopic(), JSON.stringify({ state: 'idle', at: Date.now() }), { qos: 1, retain: true }); }
+      toast(resume ? '已回到房間，你是房主 👑' : '你建立了這個房間，你是房主 👑');
+    }
+    tryResume(); renderRole(); renderRec(); renderList();
+  }
+  function becomePlayer(m) {
+    amHost = false; room = m; lastHostSeen = Date.now();
+    if (rec) stopRec(true);
+    toast(`${m.hostName || '另一位玩家'} 比你早建立房間，由他擔任房主`);
+    renderRole(); renderRec(); renderList();
+  }
+  function hostGone() {
+    if (hostGoneTimer || amHost || !room) return;
+    toast(`房主 ${room.hostName || ''} 斷線，等待重新連線…`);
+    hostGoneTimer = setTimeout(() => { hostGoneTimer = null; roomEnded(`房主 ${room ? room.hostName || '' : ''} 已離開，房間結束`); }, HOST_GRACE_MS);
+  }
+  function cancelHostGone() {
+    if (!hostGoneTimer) return;
+    clearTimeout(hostGoneTimer); hostGoneTimer = null; toast('房主已重新連線');
+  }
+  // 備援：完全收不到房主的任何訊息（例如他沒網路了），也結束房間
+  setInterval(() => {
+    if (joined && roomDecided && !amHost && room && Date.now() - lastHostSeen > ROOM_ALIVE_MS + HOST_GRACE_MS)
+      roomEnded('房主已經很久沒有回應，房間結束');
+  }, 5_000);
+  async function roomEnded(msg) {
+    if (!joined) return;
+    await leaveRoom();
+    toast(msg);
+  }
+  function renderRole() {
+    $('roomName').textContent = joined ? '#' + joined.room + (amHost ? ' 👑' : '') : '';
+  }
   window.addEventListener('pagehide', () => {
     try { if (connected) client.publish(topicOf(myId), JSON.stringify({ id: myId, leave: true })); } catch {}
   });
@@ -567,7 +659,7 @@
     if (!window.isSecureContext) { $('joinErr').textContent = '定位需要 HTTPS 網址（localhost 除外），請看 README'; return; }
     store.set('rl.name', name); store.set('rl.room', room);
     joined = { name, room }; me.name = name;
-    $('roomName').textContent = '#' + room;
+    renderRole();
     $('join').style.display = 'none';
     watchId = navigator.geolocation.watchPosition(onPosition, onGpsError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
     keepAwake();
@@ -579,7 +671,9 @@
   // ---------- 離開房間 ----------
   $('roomPill').onclick = async () => {
     if (!joined) return;
-    const msg = rec ? `你正在記錄中，離開會停止記錄並儲存。\n確定離開房間 #${joined.room}？` : `確定離開房間 #${joined.room}？`;
+    const msg = amHost
+      ? `你是房主，離開後房間會結束，所有人都會被退出${rec ? '（記錄會停止並儲存）' : ''}。\n確定離開房間 #${joined.room}？`
+      : `確定離開房間 #${joined.room}？`;
     if (!confirm(msg)) return;
     await leaveRoom();
   };
@@ -591,6 +685,12 @@
     wakeLock = null;
     if (client) {
       const c = client;
+      if (amHost && connected) {   // 房主離開：關閉房間、清掉記錄狀態
+        try {
+          c.publish(roomTopic(), JSON.stringify({ state: 'closed', host: myId, at: Date.now() }), { qos: 1, retain: true });
+          c.publish(ctlTopic(), JSON.stringify({ state: 'idle', at: Date.now() }), { qos: 1, retain: true });
+        } catch {}
+      }
       try { if (connected) c.publish(topicOf(myId), JSON.stringify({ id: myId, leave: true })); } catch {}
       client = null; connected = false;
       setTimeout(() => { try { c.end(true); } catch {} }, 300);   // 讓「離開」訊息先送出
@@ -599,6 +699,8 @@
     if (me.marker) { me.marker.remove(); me.marker = null; }
     Object.assign(me, { lat: null, lng: null, speed: 0, heading: null, acc: null, to: null, shown: null });
     lastFix = null; ctl = { state: 'idle' }; joined = null;
+    clearTimeout(decideTimer); clearTimeout(hostGoneTimer); hostGoneTimer = null;
+    room = null; amHost = false; roomDecided = false; resumeCand = null;
     $('mySpeed').textContent = '0';
     $('gpsInfo').textContent = '等待 GPS';
     $('conn').textContent = '連線中…'; $('conn').classList.remove('ok');
@@ -639,7 +741,14 @@
   let rec = null;                    // 我是房主且正在記錄時才有值
   const ctlTopic = () => joined ? `${NS}/${encodeURIComponent(joined.room)}/_ctl` : '';
 
-  function ctlActive() { return ctl.state === 'rec' && Date.now() - (ctl.at || 0) < HOST_TIMEOUT_MS; }
+  let resumeCand = null;
+  function ctlActive() { return ctl.state === 'rec' && !!room && ctl.host === room.host && Date.now() - (ctl.at || 0) < HOST_TIMEOUT_MS; }
+  // 房主重新整理後，接續原本那場記錄（要等確認自己還是房主）
+  function tryResume() {
+    if (!resumeCand || !roomDecided) return;
+    const c = resumeCand; resumeCand = null;
+    if (amHost && !rec && Date.now() - (c.at || 0) < HOST_TIMEOUT_MS) startRec(c.sid, c.startedAt);
+  }
   function publishCtl() {
     if (!connected) return;
     const msg = rec
@@ -655,10 +764,10 @@
     ctl = (c && typeof c === 'object') ? c : { state: 'idle' };
     // 我是房主、但頁面重新整理過 → 接續原本那場記錄（只看加入時的第一則）
     const first = ctlFirst; ctlFirst = false;
-    if (first && ctl.state === 'rec' && ctl.host === myId && !rec && ctlActive()) startRec(ctl.sid, ctl.startedAt);
+    if (first && ctl.state === 'rec' && ctl.host === myId && !rec) { resumeCand = ctl; tryResume(); }
     // 別人接手了（例如我斷線太久）→ 我這邊停下來並存檔
     if (rec && ctl.state === 'rec' && ctl.host !== myId) stopRec(true);
-    if (!rec && prev.state !== ctl.state && ctl.host !== myId) {
+    if (!rec && roomDecided && prev.state !== ctl.state && ctl.host !== myId && (ctl.state !== 'rec' || ctlActive())) {
       if (ctl.state === 'rec' && ctlActive()) toast(`${ctl.hostName || '房主'} 開始記錄了`);
       else if (prev.state === 'rec') toast('記錄已結束');
     }
@@ -728,6 +837,9 @@
       b.classList.add('other');
       b.textContent = `● 記錄中 ${fmtDur(Date.now() - (ctl.startedAt || Date.now()))}`;
       b.title = `${ctl.hostName || '房主'} 正在記錄`;
+    } else if (joined && roomDecided && !amHost) {
+      b.classList.add('other');
+      b.textContent = '等待房主開始記錄';
     } else {
       b.textContent = '● 開始記錄';
     }
@@ -735,7 +847,8 @@
   setInterval(renderRec, 1000);
   $('recBtn').onclick = () => {
     if (rec) { if (confirm('確定要停止記錄嗎？')) stopRec(); return; }
-    if (ctlActive()) { toast(`${ctl.hostName || '房主'} 正在記錄，只有他可以停止`); return; }
+    if (!roomDecided) { toast('正在確認房間，請稍等'); return; }
+    if (!amHost) { toast(`只有房主 ${room ? room.hostName || '' : ''} 可以開始或停止記錄`); return; }
     if (!connected) { toast('還沒連上伺服器，請稍等'); return; }
     startRec();
   };

@@ -51,19 +51,23 @@
   /* 底部：我的車速 + 排行 */
   #bottom { position:fixed; z-index:1000; left:10px; right:10px; bottom:calc(env(safe-area-inset-bottom) + 10px);
     display:flex; flex-direction:column; gap:8px; pointer-events:none; }
-  #hud { pointer-events:auto; background:var(--card); border-radius:18px; padding:10px 16px;
-    display:flex; align-items:baseline; gap:10px; backdrop-filter:blur(8px); }
-  #mySpeed { font-size:52px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; }
-  #hud .unit { color:var(--muted); font-size:15px; }
-  #hud .meta { margin-left:auto; text-align:right; font-size:12px; color:var(--muted); line-height:1.5; }
-  #list, #rpList { pointer-events:auto; background:var(--card); border-radius:18px; padding:6px; max-height:32vh;
+  #hud { pointer-events:auto; background:var(--card); border-radius:16px; padding:7px 8px 7px 12px;
+    display:flex; align-items:center; gap:6px; backdrop-filter:blur(8px); }
+  #hud .spdbox { flex:none; display:flex; align-items:baseline; gap:3px; min-width:70px; }
+  #mySpeed { font-size:32px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; }
+  #hud .unit { color:var(--muted); font-size:11px; }
+  #listToggle { flex:none; background:none; border:0; padding:0 2px; color:var(--muted); text-align:right;
+    font-size:11px; line-height:1.4; font-family:inherit; }
+  #listToggle b { color:var(--fg); font-weight:600; }
+  #list, #rpList { pointer-events:auto; background:var(--card); border-radius:16px; padding:4px; max-height:22vh;
     overflow:auto; backdrop-filter:blur(8px); }
+  body.list-collapsed #list { display:none; }
   #list:empty, #rpList:empty { display:none; }
 
   /* 記錄 */
-  #recBar { display:flex; gap:8px; pointer-events:auto; }
-  #recBtn { flex:1; padding:12px; font-size:15px; font-weight:700; border-radius:14px; }
-  #histBtn { padding:12px 16px; font-size:15px; border-radius:14px; }
+  #recBtn { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; padding:9px 8px; font-size:13px;
+    font-weight:700; border-radius:11px; background:#2c2c2c; }
+  #histBtn { padding:9px 10px; font-size:13px; border-radius:11px; background:#2c2c2c; }
   #recBtn.on-rec { background:#e53935; color:#fff; animation:pulse 1.6s infinite; }
   #recBtn.other { background:rgba(229,57,53,.22); color:#ff8a80; }
   @keyframes pulse { 50% { opacity:.72; } }
@@ -94,18 +98,20 @@
   body:not(.replaying) #replay { display:none; }
   body.replaying #bottom, body.replaying #followBtn, body.replaying #join { display:none !important; }
   body.replaying .car:not(.rp) { display:none; }
-  .rpctl { background:var(--card); border-radius:18px; padding:10px 14px; backdrop-filter:blur(8px); }
+  .rpctl { background:var(--card); border-radius:16px; padding:7px 10px 8px; backdrop-filter:blur(8px); }
   .rpctl .r1 { display:flex; align-items:center; gap:8px; }
-  .rpctl .r1 b { flex:1; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .rpctl .r2 { display:flex; align-items:center; gap:10px; }
-  #rpPlay { width:46px; height:46px; border-radius:50%; background:var(--accent); color:#111; font-size:18px; padding:0; }
-  #rpTime { flex:1; font-variant-numeric:tabular-nums; font-size:14px; }
-  #rpSlider { width:100%; margin:12px 0 8px; accent-color:var(--accent); }
+  .rpctl .r1 b { flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rpctl .r2 { display:flex; align-items:center; gap:8px; margin-top:4px; }
+  #rpPlay { width:36px; height:36px; flex:none; border-radius:50%; background:var(--accent); color:#111; font-size:14px; padding:0; }
+  #rpTime { flex:none; font-variant-numeric:tabular-nums; font-size:12px; color:var(--muted); }
+  #rpSlider { flex:1; min-width:0; margin:0; accent-color:var(--accent); }
+  #rpClose { padding:5px 10px; font-size:12px; background:#2c2c2c; }
+  #rpRate { padding:6px 10px; font-size:12px; background:#2c2c2c; }
   .row.following { outline:2px solid var(--accent); }
-  .row .name small.stat { display:block; margin:2px 0 0; font-size:11px; }
-  .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:12px; }
+  .row .name small.stat { display:block; margin:1px 0 0; font-size:10px; }
+  .row { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:10px; font-size:14px; }
   .row:active { background:rgba(255,255,255,.08); }
-  .row .dot { width:12px; height:12px; border-radius:50%; flex:none; }
+  .row .dot { width:10px; height:10px; border-radius:50%; flex:none; }
   .row .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .row .name small { color:var(--muted); margin-left:6px; }
   .row .spd { font-weight:700; font-variant-numeric:tabular-nums; }
@@ -125,6 +131,17 @@
   .car.me .arrow { width:30px; height:30px; left:-15px; top:-15px; border-color:var(--accent); }
   .car.stale { opacity:.45; }
   .leaflet-div-icon { background:none; border:0; }
+
+  /* 橫向（手機轉橫）：資訊窗縮到左下角 */
+  @media (orientation: landscape) and (max-height: 600px) {
+    #top { left:calc(env(safe-area-inset-left) + 10px); right:calc(env(safe-area-inset-right) + 10px); top:8px; }
+    #bottom, #replay { right:auto; left:calc(env(safe-area-inset-left) + 10px); width:min(310px, 40vw); bottom:8px; gap:6px; }
+    #list, #rpList { max-height:44vh; }
+    #mySpeed { font-size:28px; }
+    #hud .spdbox { min-width:60px; }
+    #toast { top:56px; }
+    #sheet .card { max-width:560px; margin:0 auto; max-height:92vh; }
+  }
 </style>
 </head>
 <body>
@@ -156,22 +173,19 @@
 
 <div id="bottom">
   <div id="list"></div>
-  <div id="recBar">
+  <div id="hud">
+    <div class="spdbox"><span id="mySpeed">0</span><span class="unit">km/h</span></div>
     <button id="recBtn" class="btn">● 開始記錄</button>
     <button id="histBtn" class="btn">紀錄</button>
-  </div>
-  <div id="hud">
-    <div id="mySpeed">0</div><div class="unit">km/h</div>
-    <div class="meta"><div id="gpsInfo">等待 GPS…</div><div id="countInfo"></div></div>
+    <button id="listToggle" title="顯示/隱藏排行"><div id="gpsInfo">等待 GPS</div><div id="countInfo"></div></button>
   </div>
 </div>
 
 <div id="replay">
   <div id="rpList"></div>
   <div class="rpctl">
-    <div class="r1"><b id="rpTitle"></b><button id="rpClose" class="btn">✕ 結束回放</button></div>
-    <input id="rpSlider" type="range" min="0" max="100" value="0" step="0.1">
-    <div class="r2"><button id="rpPlay" class="btn">▶</button><span id="rpTime">00:00 / 00:00</span><button id="rpRate" class="btn">1×</button></div>
+    <div class="r1"><b id="rpTitle"></b><span id="rpTime">00:00 / 00:00</span><button id="rpClose" class="btn">✕ 結束</button></div>
+    <div class="r2"><button id="rpPlay" class="btn">▶</button><input id="rpSlider" type="range" min="0" max="100" value="0" step="0.1"><button id="rpRate" class="btn">1×</button></div>
   </div>
 </div>
 
@@ -252,7 +266,7 @@
         if (pts.length === 1) return m.easeTo({ center: [pts[0][1], pts[0][0]], zoom: 16 });
         const b = new mapboxgl.LngLatBounds();
         pts.forEach(p => b.extend([p[1], p[0]]));
-        m.fitBounds(b, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, maxZoom: 17, duration: 800 });
+        m.fitBounds(b, { padding: fitPadding(), maxZoom: 17, duration: 800 });
       },
       onUserDrag: (fn) => m.on('dragstart', fn),
       addMarker(lat, lng, html, isMe) {
@@ -279,7 +293,7 @@
       setView: (lat, lng, z) => m.setView([lat, lng], z),
       panTo: (lat, lng) => m.panTo([lat, lng], { animate: true, duration: 1 }),
       getZoom: () => m.getZoom(),
-      fitBounds: (pts) => m.fitBounds(pts, { padding: [60, 60], maxZoom: 17 }),
+      fitBounds: (pts) => { const p = fitPadding(); m.fitBounds(pts, { paddingTopLeft: [p.left, p.top], paddingBottomRight: [p.right, p.bottom], maxZoom: 17 }); },
       onUserDrag: (fn) => m.on('dragstart', fn),
       addMarker(lat, lng, html, isMe) {
         const mk = L.marker([lat, lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }), zIndexOffset: isMe ? 1000 : 0 }).addTo(m);
@@ -290,6 +304,21 @@
       clearLines() { this._lines.forEach(l => m.removeLayer(l)); this._lines = []; },
     };
   }
+
+  // 縮放到「全部」時，避開被資訊窗蓋住的區域
+  function fitPadding() {
+    const panel = document.body.classList.contains('replaying') ? $('replay') : $('bottom');
+    const r = panel.getBoundingClientRect();
+    const land = matchMedia('(orientation: landscape) and (max-height: 600px)').matches;
+    return land ? { top: 60, bottom: 30, left: Math.round(r.width) + 40, right: 30 }
+                : { top: 70, bottom: Math.round(r.height) + 30, left: 40, right: 40 };
+  }
+  if (store.get('rl.listCollapsed') === '1') document.body.classList.add('list-collapsed');
+  $('listToggle').onclick = () => {
+    const c = document.body.classList.toggle('list-collapsed');
+    store.set('rl.listCollapsed', c ? '1' : '0');
+    renderList();
+  };
 
   let follow = true;
   $('followBtn').onclick = () => { follow = !follow; $('followBtn').classList.toggle('on', follow); if (follow && me.lat) map.panTo(me.lat, me.lng); };
@@ -371,7 +400,7 @@
         <span class="name">${esc(d.name)}<small>${stale ? '訊號中斷' : dist}</small></span>
         <span class="spd">${Math.round(d.speed || 0)} km/h</span></div>`;
     }).join('');
-    $('countInfo').textContent = `房間內 ${drivers.size + 1} 人`;
+    $('countInfo').innerHTML = `<b>${drivers.size + 1} 人</b> ${document.body.classList.contains('list-collapsed') ? '▸' : '▾'}`;
   }
   $('list').onclick = (e) => {
     const row = e.target.closest('.row'); if (!row) return;
@@ -461,7 +490,7 @@
     if (follow && !rp) map.panTo(me.lat, me.lng);
 
     $('mySpeed').textContent = Math.round(me.speed);
-    $('gpsInfo').textContent = `GPS 精度 ±${Math.round(c.accuracy)} m`;
+    $('gpsInfo').textContent = `GPS ±${Math.round(c.accuracy)}m`;
     recordPoint(me);
     sendPos();
   }
@@ -530,7 +559,7 @@
     Object.assign(me, { lat: null, lng: null, speed: 0, heading: null, acc: null, to: null, shown: null });
     lastFix = null; ctl = { state: 'idle' }; joined = null;
     $('mySpeed').textContent = '0';
-    $('gpsInfo').textContent = '等待 GPS…';
+    $('gpsInfo').textContent = '等待 GPS';
     $('conn').textContent = '連線中…'; $('conn').classList.remove('ok');
     renderRec(); renderList();
     $('join').style.display = '';
@@ -651,10 +680,11 @@
     b.classList.remove('on-rec', 'other');
     if (rec) {
       b.classList.add('on-rec');
-      b.textContent = `■ 停止記錄　${fmtDur(Date.now() - rec.startedAt)}`;
+      b.textContent = `■ 停止 ${fmtDur(Date.now() - rec.startedAt)}`;
     } else if (ctlActive()) {
       b.classList.add('other');
-      b.textContent = `● ${ctl.hostName || '房主'} 記錄中　${fmtDur(Date.now() - (ctl.startedAt || Date.now()))}`;
+      b.textContent = `● 記錄中 ${fmtDur(Date.now() - (ctl.startedAt || Date.now()))}`;
+      b.title = `${ctl.hostName || '房主'} 正在記錄`;
     } else {
       b.textContent = '● 開始記錄';
     }

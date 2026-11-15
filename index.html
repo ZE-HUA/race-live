@@ -77,12 +77,12 @@
   #toast.show { opacity:1; }
 
   /* 紀錄清單 */
-  #sheet { position:fixed; inset:0; z-index:2500; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; }
-  #sheet.hidden { display:none; }
-  #sheet .card { width:100%; max-height:80vh; overflow:auto; background:#181818; border-radius:20px 20px 0 0;
+  #sheet, #vid { position:fixed; inset:0; z-index:2500; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; }
+  #sheet.hidden, #vid.hidden, #vid .hidden { display:none; }
+  #sheet .card, #vid .card { width:100%; max-height:80vh; overflow:auto; background:#181818; border-radius:20px 20px 0 0;
     padding:16px 14px calc(env(safe-area-inset-bottom) + 16px); }
-  #sheet .head { display:flex; align-items:center; margin-bottom:8px; }
-  #sheet .head b { flex:1; font-size:18px; }
+  #sheet .head, #vid .head { display:flex; align-items:center; margin-bottom:8px; }
+  #sheet .head b, #vid .head b { flex:1; font-size:18px; }
   .sess { background:#232323; border-radius:14px; padding:12px; margin-bottom:10px; }
   .sess .t { font-weight:700; font-size:16px; }
   .sess .m { color:var(--muted); font-size:13px; margin:4px 0 10px; }
@@ -91,6 +91,20 @@
   .sess .acts .btn.primary { background:var(--accent); color:#111; font-weight:700; }
   .sess .acts .btn.danger { color:#ff8a80; margin-left:auto; }
   .hint { color:var(--muted); font-size:12px; line-height:1.5; }
+
+  /* 影片輸出 */
+  #vid .opt { display:flex; align-items:center; gap:10px; margin:12px 0; }
+  #vid .opt > span { width:64px; flex:none; color:var(--muted); font-size:14px; }
+  .seg { display:flex; flex-wrap:wrap; gap:6px; }
+  .seg button { border:0; background:#2c2c2c; color:var(--fg); border-radius:10px; padding:8px 12px; font-size:14px; }
+  .seg button.on { background:var(--accent); color:#111; font-weight:700; }
+  .bigbtn { width:100%; padding:14px; border:0; border-radius:12px; background:var(--accent); color:#111; font-size:16px; font-weight:700; margin-top:6px; }
+  #vid .bar { height:10px; background:#2c2c2c; border-radius:999px; overflow:hidden; margin:16px 0 8px; }
+  #vid .bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #vidPreview { width:100%; max-height:46vh; background:#000; border-radius:12px; display:block; margin:6px 0 10px; }
+  #vidDone .acts { display:flex; gap:8px; align-items:stretch; }
+  #vidDone .acts .bigbtn { flex:1; margin:0; }
+  #vidDone .acts .btn { background:#2c2c2c; font-size:15px; padding:0 16px; border-radius:12px; }
 
   /* 回放 */
   #replay { position:fixed; z-index:1000; left:10px; right:10px; bottom:calc(env(safe-area-inset-bottom) + 10px);
@@ -140,7 +154,7 @@
     #mySpeed { font-size:28px; }
     #hud .spdbox { min-width:60px; }
     #toast { top:56px; }
-    #sheet .card { max-width:560px; margin:0 auto; max-height:92vh; }
+    #sheet .card, #vid .card { max-width:560px; margin:0 auto; max-height:92vh; }
   }
 </style>
 </head>
@@ -195,6 +209,32 @@
     <div id="sessList"></div>
     <p class="hint">紀錄存在這支手機的瀏覽器裡。清除瀏覽器資料或換手機就會不見，重要的紀錄請匯出備份。
       CSV 可以用 Excel 開；GPX 是通用的軌跡格式，Google Earth、Strava 和多數 GPS 軟體都能讀。</p>
+  </div>
+</div>
+<div id="vid" class="hidden">
+  <div class="card">
+    <div class="head"><b>輸出影片</b><button id="vidClose" class="btn">關閉</button></div>
+    <div id="vidOpts">
+      <div class="opt"><span>方向</span><div class="seg" data-k="orient">
+        <button data-v="land">橫式 16:9</button><button data-v="port">直式 9:16</button></div></div>
+      <div class="opt"><span>播放速度</span><div class="seg" data-k="rate">
+        <button data-v="1">1×</button><button data-v="2">2×</button><button data-v="4">4×</button><button data-v="8">8×</button><button data-v="16">16×</button></div></div>
+      <div class="opt" id="vidStyleOpt"><span>地圖</span><div class="seg" data-k="style">
+        <button data-v="streets-v12">街道</button><button data-v="dark-v11">深色</button><button data-v="satellite-streets-v12">衛星</button></div></div>
+      <p id="vidInfo" class="hint"></p>
+      <button id="vidGo" class="bigbtn">開始產生影片</button>
+      <p class="hint">產生影片時請讓這個畫面保持開啟、不要鎖定螢幕。</p>
+    </div>
+    <div id="vidProg" class="hidden">
+      <div class="bar"><i id="vidBar"></i></div>
+      <p id="vidProgText" class="hint">準備中…</p>
+      <button id="vidCancel" class="btn" style="background:#2c2c2c">取消</button>
+    </div>
+    <div id="vidDone" class="hidden">
+      <video id="vidPreview" controls playsinline muted></video>
+      <div class="acts"><button id="vidShare" class="bigbtn">儲存／分享</button><button id="vidDl" class="btn">下載</button></div>
+      <p id="vidDoneText" class="hint"></p>
+    </div>
   </div>
 </div>
 <div id="toast"></div>
@@ -415,7 +455,7 @@
   const BROKER = (window.RACE_LIVE_BROKER) || 'wss://broker.hivemq.com:8884/mqtt';
   const NS = 'racelive-tw/v1';
   const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
-    '#42d4f4', '#f032e6', '#9a6324', '#469990', '#000075', '#808000', '#c2185b'];
+    '#42d4f4', '#f032e6', '#9a6324', '#469990', '#000075', '#808000', '#37474f'];
   function colorFor(id) { let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; }
   me.color = colorFor(myId);
 
@@ -423,6 +463,7 @@
   const topicOf = (id) => `${NS}/${encodeURIComponent(joined.room)}/${id}`;
   function join() {
     if (!joined || client) return;
+    ctlFirst = true;
     const c = client = mqtt.connect(BROKER, {
       clientId: 'rl-' + myId + '-' + Math.random().toString(36).slice(2, 6),
       clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 10000,
@@ -594,6 +635,7 @@
   const REC_EVERY_MS = 900;          // 每人約每秒存一筆
   const HOST_TIMEOUT_MS = 60_000;    // 房主 60 秒沒心跳 → 視為已離開，別人可以重新開始
   let ctl = { state: 'idle' };       // 房間目前的記錄狀態
+  let ctlFirst = true;               // 加入房間後收到的第一則狀態（retained）才用來判斷是否接續
   let rec = null;                    // 我是房主且正在記錄時才有值
   const ctlTopic = () => joined ? `${NS}/${encodeURIComponent(joined.room)}/_ctl` : '';
 
@@ -611,8 +653,9 @@
   function onCtl(c) {
     const prev = ctl;
     ctl = (c && typeof c === 'object') ? c : { state: 'idle' };
-    // 我是房主、但頁面重新整理過 → 接續原本那場記錄
-    if (ctl.state === 'rec' && ctl.host === myId && !rec && ctlActive()) startRec(ctl.sid, ctl.startedAt);
+    // 我是房主、但頁面重新整理過 → 接續原本那場記錄（只看加入時的第一則）
+    const first = ctlFirst; ctlFirst = false;
+    if (first && ctl.state === 'rec' && ctl.host === myId && !rec && ctlActive()) startRec(ctl.sid, ctl.startedAt);
     // 別人接手了（例如我斷線太久）→ 我這邊停下來並存檔
     if (rec && ctl.state === 'rec' && ctl.host !== myId) stopRec(true);
     if (!rec && prev.state !== ctl.state && ctl.host !== myId) {
@@ -751,6 +794,11 @@
       tr.t.push(t); tr.lat.push(lat); tr.lng.push(lng); tr.spd.push(spd); tr.hdg.push(hdg);
       if (spd > tr.max) tr.max = spd;
     }
+    const used = new Set();
+    for (const tr of tracks.values()) {
+      if (used.has(tr.color)) { const free = PALETTE.find(c => !used.has(c)); if (free) tr.color = free; }
+      used.add(tr.color);
+    }
     for (const tr of tracks.values()) {
       const secs = (tr.t[tr.t.length - 1] - tr.t[0]) / 1000;
       tr.avg = secs > 0 ? (tr.dist / secs) * 3.6 : 0;
@@ -777,6 +825,7 @@
           <button class="btn primary" data-act="play">▶ 回放</button>
           <button class="btn" data-act="csv">匯出 CSV</button>
           <button class="btn" data-act="gpx">匯出 GPX</button>
+          <button class="btn" data-act="video">🎬 影片</button>
           ${live ? '' : '<button class="btn danger" data-act="del">刪除</button>'}
         </div></div>`;
     }).join('');
@@ -799,6 +848,7 @@
     if (act === 'csv') downloadFile(base + '.csv', toCsv(data), 'text/csv;charset=utf-8');
     if (act === 'gpx') downloadFile(base + '.gpx', toGpx(data), 'application/gpx+xml');
     if (act === 'play') { $('sheet').classList.add('hidden'); startReplay(data); }
+    if (act === 'video') { $('sheet').classList.add('hidden'); openVideo(data); }
   };
 
   // ---------- 匯出 ----------
@@ -931,6 +981,351 @@
     toast(rp.follow ? '鏡頭跟著這台車' : '取消跟隨');
     rpRender(true);
   };
+
+  // =====================================================================
+  // 影片輸出：在手機上把一場紀錄逐格畫出來，用 H.264 編碼成 .mp4
+  // 地圖用固定鏡頭的靜態底圖（框住整場範圍），每格畫上軌跡、車子、排行、計時
+  // =====================================================================
+  const VFPS = 30, PRE_SEC = 1, POST_SEC = 2;
+  const VFONT = '-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif';
+  const vidOpt = { orient: 'land', rate: 4, style: 'streets-v12' };
+  try { Object.assign(vidOpt, JSON.parse(store.get('rl.vidOpt') || '{}')); } catch {}
+  let vidData = null, vidJob = null, vidOut = null;
+
+  function openVideo(data) {
+    vidData = data;
+    if (vidOut) { URL.revokeObjectURL(vidOut.url); vidOut = null; }
+    $('vidOpts').classList.remove('hidden'); $('vidProg').classList.add('hidden'); $('vidDone').classList.add('hidden');
+    $('vidStyleOpt').style.display = MAPBOX_TOKEN ? '' : 'none';
+    syncSeg(); $('vid').classList.remove('hidden');
+  }
+  function syncSeg() {
+    document.querySelectorAll('#vid .seg').forEach(seg => {
+      seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(vidOpt[seg.dataset.k]) === b.dataset.v));
+    });
+    if (!vidData) return;
+    const rec = vidData.t1 - vidData.t0, len = rec / vidOpt.rate + (PRE_SEC + POST_SEC) * 1000;
+    $('vidInfo').textContent = `紀錄長度 ${fmtDur(rec)} → 影片長度約 ${fmtDur(len)}（${vidOpt.orient === 'land' ? '1280×720' : '720×1280'}，30fps）`;
+  }
+  document.querySelectorAll('#vid .seg').forEach(seg => seg.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const k = seg.dataset.k; vidOpt[k] = k === 'rate' ? +b.dataset.v : b.dataset.v;
+    store.set('rl.vidOpt', JSON.stringify(vidOpt)); syncSeg();
+  });
+  $('vidClose').onclick = () => { if (vidJob) vidJob.cancel = true; $('vid').classList.add('hidden'); };
+  $('vidCancel').onclick = () => { if (vidJob) vidJob.cancel = true; };
+  $('vidGo').onclick = async () => {
+    if (!vidData || vidJob) return;
+    vidJob = { cancel: false };
+    $('vidOpts').classList.add('hidden'); $('vidProg').classList.remove('hidden');
+    keepAwake();
+    const t0 = performance.now();
+    const prog = (f, text) => {
+      $('vidBar').style.width = (f * 100).toFixed(1) + '%';
+      if (text) { $('vidProgText').textContent = text; return; }
+      const el = (performance.now() - t0) / 1000, left = f > 0.03 ? el / f - el : null;
+      $('vidProgText').textContent = `產生中 ${Math.round(f * 100)}%` + (left != null ? `，大約還要 ${fmtDur(left * 1000)}` : '');
+    };
+    try {
+      const out = await renderVideo(vidData, { ...vidOpt }, prog, vidJob);
+      const name = `race-${vidData.meta.room}-${fmtFileDate(vidData.meta.startedAt)}.${out.ext}`;
+      vidOut = { ...out, name, url: URL.createObjectURL(out.blob) };
+      $('vidPreview').src = vidOut.url;
+      $('vidDoneText').textContent = `${name}　${(out.blob.size / 1048576).toFixed(1)} MB` +
+        (out.ext !== 'mp4' ? '（這個瀏覽器不支援 MP4 編碼，輸出成 WebM）' : '') +
+        '。iPhone 按「儲存／分享」後選「儲存影片」就會存進相簿。';
+      $('vidProg').classList.add('hidden'); $('vidDone').classList.remove('hidden');
+    } catch (e) {
+      $('vidProg').classList.add('hidden'); $('vidOpts').classList.remove('hidden');
+      if (e && e.message === 'cancel') toast('已取消');
+      else { console.error(e); toast('影片產生失敗：' + (e && e.message || e)); }
+    }
+    vidJob = null;
+  };
+  $('vidShare').onclick = async () => {
+    if (!vidOut) return;
+    const file = new File([vidOut.blob], vidOut.name, { type: vidOut.blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: vidOut.name }); } catch (e) { if (e.name !== 'AbortError') downloadBlob(vidOut.name, vidOut.blob); }
+    } else downloadBlob(vidOut.name, vidOut.blob);
+  };
+  $('vidDl').onclick = () => { if (vidOut) downloadBlob(vidOut.name, vidOut.blob); };
+  function downloadBlob(name, blob) {
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 10000);
+  }
+
+  // --- 投影：Web Mercator（和 Mapbox 靜態地圖一樣，512px 圖磚） ---
+  const mercX = (lng) => (lng + 180) / 360 * 512;
+  const mercY = (lat) => { const s = Math.sin(lat * Math.PI / 180); return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 512; };
+  function fitView(tracks, W, H, pad) {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const tr of tracks) for (let i = 0; i < tr.t.length; i++) {
+      const x = mercX(tr.lng[i]), y = mercY(tr.lat[i]);
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    const dx = Math.max(x1 - x0, 1e-7), dy = Math.max(y1 - y0, 1e-7);
+    let z = Math.log2(Math.min((W - pad.l - pad.r) / dx, (H - pad.t - pad.b) / dy));
+    z = Math.max(1, Math.min(17, Math.floor(z * 100) / 100));
+    const k = Math.pow(2, z);
+    const ax = (pad.l + W - pad.r) / 2, ay = (pad.t + H - pad.b) / 2;     // 可用區域的中心
+    const cxw = (x0 + x1) / 2 * k - (ax - W / 2), cyw = (y0 + y1) / 2 * k - (ay - H / 2);
+    const cLng = cxw / k / 512 * 360 - 180;
+    const cLat = (2 * Math.atan(Math.exp(2 * Math.PI * (0.5 - cyw / k / 512))) - Math.PI / 2) * 180 / Math.PI;
+    return { z, k, cxw, cyw, cLat, cLng, proj: (lat, lng) => [W / 2 + mercX(lng) * k - cxw, H / 2 + mercY(lat) * k - cyw] };
+  }
+  const loadImg = (url) => new Promise((res, rej) => {
+    const im = new Image(); im.crossOrigin = 'anonymous';
+    im.onload = () => res(im); im.onerror = () => rej(new Error('地圖底圖載入失敗')); im.src = url;
+  });
+  async function glBackground(v, W, H, style) {
+    const div = document.createElement('div');
+    div.style.cssText = `position:fixed;left:${-W - 200}px;top:0;width:${W}px;height:${H}px;pointer-events:none;`;
+    document.body.appendChild(div);
+    let m = null;
+    try {
+      m = new mapboxgl.Map({ container: div, style: 'mapbox://styles/mapbox/' + style, center: [v.cLng, v.cLat], zoom: v.z,
+        interactive: false, attributionControl: false, preserveDrawingBuffer: true, pixelRatio: 2, fadeDuration: 0, language: 'zh-Hant' });
+      await new Promise((res, rej) => {
+        const to = setTimeout(() => rej(new Error('地圖載入逾時')), 25000);
+        m.once('idle', () => { clearTimeout(to); res(); });
+      });
+      const c = mkCanvas(W, H); c.getContext('2d').drawImage(m.getCanvas(), 0, 0, W, H);
+      return c;
+    } finally { try { m && m.remove(); } catch {} div.remove(); }
+  }
+  async function loadBackground(v, W, H, style) {
+    if (MAPBOX_TOKEN && window.mapboxgl) {
+      try { return { img: await glBackground(v, W, H, style), credit: '© Mapbox © OpenStreetMap', logo: false }; } catch (e) { console.warn(e); }
+    }
+    if (MAPBOX_TOKEN) {
+      const url = `https://api.mapbox.com/styles/v1/mapbox/${style}/static/${v.cLng.toFixed(6)},${v.cLat.toFixed(6)},${v.z.toFixed(2)},0/${W}x${H}@2x?access_token=${MAPBOX_TOKEN}`;
+      try { return { img: await loadImg(url), credit: '© Mapbox © OpenStreetMap', logo: true }; } catch (e) { console.warn(e); }
+    }
+    // 沒有 Mapbox：用 OpenStreetMap 圖磚拼起來
+    const zt = Math.max(1, Math.min(19, Math.round(v.z) + 1)), sc = Math.pow(2, v.z + 1 - zt), ts = 256 * sc;
+    const c = mkCanvas(W, H), g = c.getContext('2d');
+    g.fillStyle = '#ddd'; g.fillRect(0, 0, W, H);
+    const tx0 = Math.floor((v.cxw - W / 2) / ts), tx1 = Math.floor((v.cxw + W / 2) / ts);
+    const ty0 = Math.floor((v.cyw - H / 2) / ts), ty1 = Math.floor((v.cyw + H / 2) / ts), n = 1 << zt;
+    const jobs = [];
+    for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
+      if (ty < 0 || ty >= n) continue;
+      const x = W / 2 + tx * ts - v.cxw, y = H / 2 + ty * ts - v.cyw;
+      jobs.push(loadImg(`https://tile.openstreetmap.org/${zt}/${((tx % n) + n) % n}/${ty}.png`)
+        .then(im => g.drawImage(im, x, y, ts + 0.5, ts + 0.5)).catch(() => {}));
+    }
+    await Promise.all(jobs);
+    return { img: c, credit: '© OpenStreetMap contributors', logo: false };
+  }
+  function mkCanvas(W, H) { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; }
+  function rrect(g, x, y, w, h, r) {
+    g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+  }
+  const loadScript = (src) => new Promise((res, rej) => {
+    if (document.querySelector(`script[src="${src}"]`)) return res();
+    const sc = document.createElement('script'); sc.src = src; sc.onload = res; sc.onerror = () => rej(new Error('元件載入失敗，請檢查網路')); document.head.appendChild(sc);
+  });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  async function renderVideo(data, opt, prog, job) {
+    const land = opt.orient === 'land';
+    const W = land ? 1280 : 720, H = land ? 720 : 1280, S = Math.min(W, H) / 720;
+    const T = [...data.tracks.values()];
+    const rowH = 40 * S, maxRows = Math.min(T.length, land ? Math.floor((H - 260 * S) / rowH) : 8);
+    const lbW = land ? 320 * S : W - 48 * S, lbH = 52 * S + maxRows * rowH;
+    const lbX = 24 * S, lbY = land ? 96 * S : H - lbH - 56 * S;
+    const pad = land ? { l: lbX + lbW + 50 * S, r: 60 * S, t: 110 * S, b: 70 * S }
+                     : { l: 50 * S, r: 50 * S, t: 130 * S, b: lbH + 110 * S };
+    const view = fitView(T, W, H, pad);
+    prog(0, '載入地圖底圖…');
+    const bg = await loadBackground(view, W, H, opt.style);
+    if (job.cancel) throw new Error('cancel');
+
+    // 底層：地圖 + 淡淡的完整路線（只畫一次）
+    const base = mkCanvas(W, H), b = base.getContext('2d');
+    b.drawImage(bg.img, 0, 0, W, H);
+    if (opt.style.startsWith('satellite')) { b.fillStyle = 'rgba(0,0,0,.18)'; b.fillRect(0, 0, W, H); }
+    b.lineCap = b.lineJoin = 'round';
+    for (const tr of T) {
+      tr.px = []; tr.py = []; tr.gap = [];
+      for (let i = 0; i < tr.t.length; i++) {
+        const [x, y] = view.proj(tr.lat[i], tr.lng[i]); tr.px.push(x); tr.py.push(y);
+        tr.gap.push(i > 0 && (tr.t[i] - tr.t[i - 1] > 15_000 || Math.hypot(x - tr.px[i - 1], y - tr.py[i - 1]) > 400 * S));
+      }
+      tr.drawn = -1;
+      b.strokeStyle = tr.color; b.globalAlpha = 0.28; b.lineWidth = 4 * S; b.beginPath();
+      for (let i = 0; i < tr.px.length; i++) (i === 0 || tr.gap[i]) ? b.moveTo(tr.px[i], tr.py[i]) : b.lineTo(tr.px[i], tr.py[i]);
+      b.stroke(); b.globalAlpha = 1;
+    }
+    // 已經跑過的路線：逐格往上疊（時間只會往前，不用每格重畫整條）
+    const trail = mkCanvas(W, H), tg = trail.getContext('2d');
+    tg.lineCap = tg.lineJoin = 'round'; tg.lineWidth = 5 * S;
+    const cv = mkCanvas(W, H), g = cv.getContext('2d');
+
+    const span = data.t1 - data.t0;
+    const mainFrames = Math.max(1, Math.ceil(span / opt.rate / 1000 * VFPS));
+    const frames = PRE_SEC * VFPS + mainFrames + POST_SEC * VFPS;
+    const timeAt = (i) => Math.min(data.t1, data.t0 + Math.max(0, i - PRE_SEC * VFPS) * (1000 / VFPS) * opt.rate);
+    const title = `#${data.meta.room}　${fmtDate(data.meta.startedAt)}`;
+
+    function draw(i) {
+      const t = timeAt(i);
+      g.drawImage(base, 0, 0);
+      for (const tr of T) {
+        tg.strokeStyle = tr.color;
+        while (tr.drawn + 1 < tr.t.length && tr.t[tr.drawn + 1] <= t) {
+          const j = ++tr.drawn;
+          if (j > 0 && !tr.gap[j]) { tg.beginPath(); tg.moveTo(tr.px[j - 1], tr.py[j - 1]); tg.lineTo(tr.px[j], tr.py[j]); tg.stroke(); }
+        }
+      }
+      g.drawImage(trail, 0, 0);
+      const cur = [];
+      for (const tr of T) {
+        const s = sampleAt(tr, t); if (!s) continue;
+        const [x, y] = view.proj(s.lat, s.lng);
+        if (!s.stale && tr.drawn >= 0 && tr.drawn + 1 < tr.t.length && !tr.gap[tr.drawn + 1]) {   // 最後一小段接到車子目前位置
+          g.lineCap = 'round'; g.strokeStyle = tr.color; g.lineWidth = 5 * S;
+          g.beginPath(); g.moveTo(tr.px[tr.drawn], tr.py[tr.drawn]); g.lineTo(x, y); g.stroke();
+        }
+        cur.push({ tr, s, x, y });
+      }
+      cur.sort((a, c) => (a.s.stale ? 0 : 1) - (c.s.stale ? 0 : 1));
+      for (const c of cur) drawCar(g, S, c.x, c.y, c.tr, c.s);
+      drawBoard(g, S, cur, lbX, lbY, lbW, rowH, maxRows);
+      drawHeader(g, S, W, title, t - data.t0, span, opt.rate, bg.credit, bg.logo, land);
+    }
+    return encodeVideo(cv, W, H, frames, draw, prog, job);
+  }
+
+  function drawCar(g, S, x, y, tr, s) {
+    g.save();
+    g.globalAlpha = s.stale ? 0.45 : 1;
+    const r = 14 * S;
+    g.shadowColor = 'rgba(0,0,0,.45)'; g.shadowBlur = 6 * S;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = tr.color; g.fill();
+    g.shadowBlur = 0; g.lineWidth = 3 * S; g.strokeStyle = '#fff'; g.stroke();
+    if (s.hdg != null) {
+      g.save(); g.translate(x, y); g.rotate(s.hdg * Math.PI / 180);
+      g.beginPath(); g.moveTo(0, -8 * S); g.lineTo(6 * S, 7 * S); g.lineTo(0, 3.5 * S); g.lineTo(-6 * S, 7 * S); g.closePath();
+      g.fillStyle = '#fff'; g.fill(); g.restore();
+    }
+    g.font = `600 ${15 * S}px ${VFONT}`; const w1 = g.measureText(tr.name).width;
+    g.font = `800 ${17 * S}px ${VFONT}`; const sp = String(Math.round(s.spd)), w2 = g.measureText(sp).width;
+    const bw = w1 + w2 + 22 * S, bh = 26 * S, bx = x + 17 * S, by = y - 36 * S;
+    g.shadowColor = 'rgba(0,0,0,.35)'; g.shadowBlur = 4 * S;
+    rrect(g, bx, by, bw, bh, 7 * S); g.fillStyle = tr.color; g.fill(); g.shadowBlur = 0;
+    g.fillStyle = '#fff'; g.textBaseline = 'middle';
+    g.font = `600 ${15 * S}px ${VFONT}`; g.fillText(tr.name, bx + 8 * S, by + bh / 2 + S);
+    g.font = `800 ${17 * S}px ${VFONT}`; g.fillText(sp, bx + 14 * S + w1, by + bh / 2 + S);
+    g.restore();
+  }
+  function drawBoard(g, S, cur, x, y, w, rowH, maxRows) {
+    const rows = cur.slice().sort((a, c) => (c.s.stale ? -1 : c.s.spd) - (a.s.stale ? -1 : a.s.spd)).slice(0, maxRows);
+    const h = 52 * S + Math.max(rows.length, 1) * rowH;
+    g.save();
+    rrect(g, x, y, w, h, 16 * S); g.fillStyle = 'rgba(16,16,16,.84)'; g.fill();
+    g.textBaseline = 'middle'; g.fillStyle = '#9a9a9a'; g.font = `600 ${14 * S}px ${VFONT}`;
+    g.fillText('即時車速排行', x + 16 * S, y + 26 * S);
+    rows.forEach((r, i) => {
+      const cy = y + 52 * S + i * rowH + rowH / 2;
+      g.globalAlpha = r.s.stale ? 0.45 : 1;
+      g.fillStyle = '#9a9a9a'; g.font = `700 ${15 * S}px ${VFONT}`; g.fillText(String(i + 1), x + 16 * S, cy);
+      g.beginPath(); g.arc(x + 42 * S, cy, 6 * S, 0, Math.PI * 2); g.fillStyle = r.tr.color; g.fill();
+      g.fillStyle = '#fff'; g.font = `600 ${17 * S}px ${VFONT}`;
+      let name = r.tr.name; const maxW = w - 160 * S;
+      while (g.measureText(name).width > maxW && name.length > 1) name = name.slice(0, -1);
+      if (name !== r.tr.name) name += '…';
+      g.fillText(name, x + 56 * S, cy);
+      g.textAlign = 'right'; g.font = `800 ${19 * S}px ${VFONT}`;
+      const sp = String(Math.round(r.s.spd)); g.fillText(sp, x + w - 58 * S, cy);
+      g.fillStyle = '#9a9a9a'; g.font = `500 ${12 * S}px ${VFONT}`; g.fillText('km/h', x + w - 16 * S, cy + S);
+      g.textAlign = 'left';
+    });
+    g.restore();
+  }
+  function drawHeader(g, S, W, title, el, span, rate, credit, hasLogo, land) {
+    g.save(); g.textBaseline = 'middle';
+    g.font = `700 ${18 * S}px ${VFONT}`;
+    const tw = g.measureText(title).width;
+    rrect(g, 24 * S, 24 * S, tw + 32 * S, 48 * S, 24 * S); g.fillStyle = 'rgba(16,16,16,.84)'; g.fill();
+    g.fillStyle = '#fff'; g.fillText(title, 40 * S, 48 * S + S);
+    // 右上：經過時間 / 總長，倍速
+    const tm = fmtDur(el), tot = ' / ' + fmtDur(span), rt = rate > 1 ? `  ${rate}×` : '';
+    g.font = `800 ${24 * S}px ${VFONT}`; const w1 = g.measureText(tm).width;
+    g.font = `600 ${15 * S}px ${VFONT}`; const w2 = g.measureText(tot + rt).width;
+    const bw = w1 + w2 + 32 * S, bx = W - 24 * S - bw;
+    rrect(g, bx, 24 * S, bw, 48 * S, 24 * S); g.fillStyle = 'rgba(16,16,16,.84)'; g.fill();
+    g.fillStyle = '#ffcc00'; g.font = `800 ${24 * S}px ${VFONT}`; g.fillText(tm, bx + 16 * S, 48 * S + S);
+    g.fillStyle = '#bbb'; g.font = `600 ${15 * S}px ${VFONT}`; g.fillText(tot + rt, bx + 16 * S + w1, 49 * S);
+    // 地圖來源標示（Mapbox 靜態圖本身左下角已有 logo）
+    if (!hasLogo) {
+      g.font = `500 ${11 * S}px ${VFONT}`; g.textAlign = 'right'; g.fillStyle = 'rgba(0,0,0,.6)';
+      g.fillText(credit, W - 10 * S, g.canvas.height - 10 * S);
+    }
+    g.restore();
+  }
+
+  async function encodeVideo(canvas, W, H, frames, draw, prog, job) {
+    // 1) WebCodecs（iPhone iOS 16.4+、Android Chrome、電腦版 Chrome/Edge/Safari）：比實際時間快，直接出 MP4
+    if (window.VideoEncoder && window.VideoFrame) {
+      let cfg = null;
+      for (const codec of ['avc1.640028', 'avc1.4d0028', 'avc1.42e01f', 'avc1.42001f']) {
+        try {
+          const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate: 5_000_000, framerate: VFPS });
+          if (r.supported) { cfg = r.config; break; }
+        } catch {}
+      }
+      if (cfg) {
+        prog(0, '準備編碼器…');
+        await loadScript('https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.min.js');
+        const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), video: { codec: 'avc', width: W, height: H }, fastStart: 'in-memory' });
+        let err = null;
+        const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { err = e; } });
+        enc.configure(cfg);
+        try {
+          for (let i = 0; i < frames; i++) {
+            if (job.cancel) throw new Error('cancel');
+            if (err) throw err;
+            draw(i);
+            const vf = new VideoFrame(canvas, { timestamp: Math.round(i * 1e6 / VFPS), duration: Math.round(1e6 / VFPS) });
+            enc.encode(vf, { keyFrame: i % (VFPS * 2) === 0 });
+            vf.close();
+            while (enc.encodeQueueSize > 8) await sleep(3);
+            if (i % 15 === 0) { prog(i / frames); await sleep(0); }
+          }
+          await enc.flush();
+        } finally { try { enc.close(); } catch {} }
+        if (err) throw err;
+        muxer.finalize();
+        prog(1);
+        return { blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }), ext: 'mp4' };
+      }
+    }
+    // 2) 備用：MediaRecorder 即時錄製（需要等完整影片長度）
+    if (!window.MediaRecorder || !canvas.captureStream) throw new Error('這個瀏覽器不支援影片輸出，請更新系統或改用 Chrome / Safari');
+    const mime = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+      .find(m => MediaRecorder.isTypeSupported(m)) || '';
+    const stream = canvas.captureStream(VFPS), chunks = [];
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 5_000_000 } : undefined);
+    mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(r => { mr.onstop = r; });
+    draw(0); mr.start(1000);
+    const start = performance.now();
+    try {
+      for (let i = 0; i < frames; i++) {
+        if (job.cancel) throw new Error('cancel');
+        draw(i);
+        if (i % 15 === 0) prog(i / frames);
+        const wait = start + (i + 1) * 1000 / VFPS - performance.now();
+        await sleep(Math.max(0, wait));
+      }
+    } finally { mr.stop(); await stopped; stream.getTracks().forEach(t => t.stop()); }
+    const type = mr.mimeType || mime || 'video/webm';
+    return { blob: new Blob(chunks, { type }), ext: type.includes('mp4') ? 'mp4' : 'webm' };
+  }
 
   // ---------- 小提示 ----------
   let toastTimer = null;

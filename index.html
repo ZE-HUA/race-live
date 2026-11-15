@@ -152,9 +152,14 @@
   #course .bigbtn:disabled { opacity:.4; }
   #pickBar { position:fixed; z-index:2400; left:10px; right:10px; top:calc(env(safe-area-inset-top) + 60px); background:#111; color:#fff;
     border:2px solid var(--accent); border-radius:14px; padding:10px 12px; display:flex; align-items:center; gap:10px; font-size:15px; font-weight:600; }
-  #pickBar span { flex:1; }
-  #pickBar .btn { background:#333; }
-  body.picking #map { cursor:crosshair; }
+  #pickBar span { flex:1; min-width:0; line-height:1.35; }
+  #pickBar span small { display:block; color:var(--muted); font-weight:500; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #pickBar .btn { background:#333; flex:none; }
+  #pickBar .btn.ok { background:var(--accent); color:#111; font-weight:800; }
+  body.picking #bottom, body.picking #p2p { display:none !important; }
+  .pin-wrap { width:36px; height:46px; cursor:grab; }
+  .pin-wrap svg { width:36px; height:46px; display:block; filter:drop-shadow(0 3px 4px rgba(0,0,0,.45)); }
+  .pin-wrap:active { cursor:grabbing; }
   #p2p { pointer-events:auto; background:var(--card); border-radius:16px; padding:7px 12px; display:flex; align-items:center; gap:10px;
     font-size:13px; backdrop-filter:blur(8px); }
   #p2p .big { font-size:24px; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -375,7 +380,7 @@
     <p class="hint">搜尋資料來自 OpenStreetMap 與 Mapbox。</p>
   </div>
 </div>
-<div id="pickBar" class="hidden"><span id="pickText">點地圖設定起點</span><button id="pickCancel" class="btn">取消</button></div>
+<div id="pickBar" class="hidden"><span id="pickText">拖曳圖釘調整起點</span><button id="pickCancel" class="btn">取消</button><button id="pickOk" class="btn ok">確定</button></div>
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -429,8 +434,12 @@
       }
     };
     let courseData = null; const courseMk = [];
+    let courseRetry = false;
     const drawCourse = () => {
-      if (!m.isStyleLoaded()) return;
+      if (!m.isStyleLoaded()) {   // 地圖還在載入（例如剛飛到新位置）→ 載入完成後再畫
+        if (!courseRetry) { courseRetry = true; m.once('idle', () => { courseRetry = false; drawCourse(); }); }
+        return;
+      }
       const id = 'rl-course', c = courseData, feats = [];
       if (c && c.start) feats.push({ type: 'Feature', properties: { k: 's' }, geometry: { type: 'Polygon', coordinates: [circlePts(c.start, c.r)] } });
       if (c && c.finish) feats.push({ type: 'Feature', properties: { k: 'f' }, geometry: { type: 'Polygon', coordinates: [circlePts(c.finish, c.r)] } });
@@ -487,6 +496,14 @@
         }
       },
       onMapClick: (fn) => m.on('click', (e) => fn(e.lngLat.lat, e.lngLat.lng)),
+      getCenter: () => { const c = m.getCenter(); return { lat: c.lat, lng: c.lng }; },
+      addPin(lat, lng, html, onMove) {
+        const el = document.createElement('div'); el.className = 'pin-wrap'; el.innerHTML = html;
+        const mk = new mapboxgl.Marker({ element: el, anchor: 'bottom', draggable: true }).setLngLat([lng, lat]).addTo(m);
+        const fire = () => { const p = mk.getLngLat(); onMove(p.lat, p.lng); };
+        mk.on('drag', fire); mk.on('dragend', fire);
+        return { setPos: (a, b) => { mk.setLngLat([b, a]); fire(); }, remove: () => mk.remove() };
+      },
     };
   }
   function makeLeaflet() {
@@ -515,6 +532,14 @@
         for (const [pt, html] of gateLabels(c)) this._course.push(L.marker([pt.lat, pt.lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }), interactive: false }).addTo(m));
       },
       onMapClick: (fn) => m.on('click', (e) => fn(e.latlng.lat, e.latlng.lng)),
+      getCenter: () => { const c = m.getCenter(); return { lat: c.lat, lng: c.lng }; },
+      addPin(lat, lng, html, onMove) {
+        const mk = L.marker([lat, lng], { draggable: true, zIndexOffset: 2000,
+          icon: L.divIcon({ className: 'pin-wrap', html, iconSize: [36, 46], iconAnchor: [18, 46] }) }).addTo(m);
+        const fire = () => { const p = mk.getLatLng(); onMove(p.lat, p.lng); };
+        mk.on('drag', fire); mk.on('dragend', fire);
+        return { setPos: (a, b) => { mk.setLatLng([a, b]); fire(); }, remove: () => m.removeLayer(mk) };
+      },
     };
   }
 
@@ -526,8 +551,8 @@
   }
   function gateLabels(c) {
     const out = [];
-    if (c && c.start) out.push([c.start, '<div class="gate-wrap"><div class="gate gate-s">起點</div></div>']);
-    if (c && c.finish) out.push([c.finish, '<div class="gate-wrap"><div class="gate gate-f">🏁 終點</div></div>']);
+    if (c && c.start && c.hideLabel !== 'start') out.push([c.start, '<div class="gate-wrap"><div class="gate gate-s">起點</div></div>']);
+    if (c && c.finish && c.hideLabel !== 'finish') out.push([c.finish, '<div class="gate-wrap"><div class="gate gate-f">🏁 終點</div></div>']);
     return out;
   }
 
@@ -959,6 +984,7 @@
     clearTimeout(decideTimer); clearTimeout(hostGoneTimer); hostGoneTimer = null;
     room = null; amHost = false; roomDecided = false; resumeCand = null;
     results.clear(); draft = null; draftShown = false; pickTarget = null;
+    if (adjust) { adjust.pin.remove(); adjust = null; }
     $('course').classList.add('hidden'); $('pickBar').classList.add('hidden'); document.body.classList.remove('picking');
     applyRoomMode();
     $('mySpeed').textContent = '0';
@@ -2184,10 +2210,8 @@
     } else if (b.dataset.search) {
       openSearch(b.dataset.search);
     } else if (b.dataset.pick) {
-      pickTarget = b.dataset.pick;
-      $('pickText').textContent = `點地圖設定${pickTarget === 'start' ? '起點' : '終點'}`;
-      $('course').classList.add('hidden'); $('pickBar').classList.remove('hidden'); document.body.classList.add('picking');
-      follow = false; $('followBtn').classList.remove('on');
+      const key = b.dataset.pick, cur = draft[key];
+      startAdjust(key, cur || { ...map.getCenter(), name: null }, !cur);
     }
   };
   // ---------- 起終點：搜尋地點、自動查路名 ----------
@@ -2246,9 +2270,8 @@
   $('searchList').onclick = (e) => {
     const b = e.target.closest('.sres'); if (!b) return;
     const x = searchResults[+b.dataset.i]; if (!x) return;
-    closeSearch();
-    setDraftPoint(searchTarget, { lat: +x.lat.toFixed(6), lng: +x.lng.toFixed(6), name: x.name || null });
-    map.setView(x.lat, x.lng, 16);
+    $('search').classList.add('hidden');
+    startAdjust(searchTarget, { lat: x.lat, lng: x.lng, name: x.name || null });
   };
 
   // ---------- 我的路線（存在這支手機） ----------
@@ -2291,13 +2314,48 @@
     toast(`已載入「${c.name}」，按「套用到房間」生效`);
   };
 
-  function endPick() { pickTarget = null; $('pickBar').classList.add('hidden'); document.body.classList.remove('picking'); $('course').classList.remove('hidden'); }
-  $('pickCancel').onclick = endPick;
-  map.onMapClick((lat, lng) => {
-    if (!pickTarget) return;
-    const target = pickTarget;
-    endPick(); setDraftPoint(target, { lat: +lat.toFixed(6), lng: +lng.toFixed(6) });
-  });
+  // ---------- 圖釘微調：地圖移到該位置，拖曳圖釘（或點地圖）決定最終位置 ----------
+  let adjust = null;
+  const pinSvg = (key) => `<svg viewBox="0 0 36 46"><path d="M18 1C8.6 1 1 8.4 1 17.6 1 30 18 45 18 45s17-15 17-27.4C35 8.4 27.4 1 18 1z"
+    fill="${key === 'start' ? '#16a34a' : '#111827'}" stroke="#fff" stroke-width="2.5"/><text x="18" y="22" text-anchor="middle" font-size="13"
+    font-weight="800" fill="#fff" font-family="-apple-system,PingFang TC,Noto Sans TC,sans-serif">${key === 'start' ? '起' : '終'}</text></svg>`;
+  function startAdjust(key, pt, fromCenter) {
+    if (adjust) adjust.pin.remove();
+    adjust = { key, name: pt.name || null, orig: { lat: pt.lat, lng: pt.lng }, cur: { lat: pt.lat, lng: pt.lng } };
+    $('course').classList.add('hidden'); $('pickBar').classList.remove('hidden'); document.body.classList.add('picking');
+    follow = false; $('followBtn').classList.remove('on');
+    if (!fromCenter) map.setView(pt.lat, pt.lng, 17);
+    adjust.pin = map.addPin(pt.lat, pt.lng, pinSvg(key), (lat, lng) => previewAdjust(lat, lng));
+    previewAdjust(pt.lat, pt.lng);
+  }
+  let adjRaf = 0;
+  function previewAdjust(lat, lng) {
+    if (!adjust) return;
+    adjust.cur = { lat, lng };
+    cancelAnimationFrame(adjRaf);
+    adjRaf = requestAnimationFrame(() => {   // 拖曳時每一格最多重畫一次感應圈
+      if (!adjust) return;
+      const c = draftCourse() || { r: draft.r };
+      map.setCourse({ ...c, r: draft.r, [adjust.key]: adjust.cur, hideLabel: adjust.key });
+      const moved = haversine(adjust.orig, adjust.cur), label = adjust.key === 'start' ? '起點' : '終點';
+      $('pickText').innerHTML = `拖曳圖釘或點地圖，調整${label}位置` +
+        `<small>${esc(adjust.name || '')}${adjust.name && moved >= 1 ? ' · ' : ''}${moved >= 1 ? `已移動 ${fmtDist(moved)}` : ''}</small>`;
+    });
+  }
+  function endAdjust(save) {
+    if (!adjust) return;
+    const a = adjust; adjust = null;
+    a.pin.remove();
+    $('pickBar').classList.add('hidden'); document.body.classList.remove('picking'); $('course').classList.remove('hidden');
+    if (save) {
+      // 移動很少就保留搜尋到的名稱；移遠了就重新查路名
+      const name = haversine(a.orig, a.cur) < 60 ? a.name : null;
+      setDraftPoint(a.key, { lat: +a.cur.lat.toFixed(6), lng: +a.cur.lng.toFixed(6), name });
+    } else map.setCourse(draftCourse());
+  }
+  $('pickOk').onclick = () => endAdjust(true);
+  $('pickCancel').onclick = () => endAdjust(false);
+  map.onMapClick((lat, lng) => { if (adjust) adjust.pin.setPos(lat, lng); });
   function closeCourse() { draftShown = false; $('course').classList.add('hidden'); applyRoomMode(); }
   $('courseClose').onclick = closeCourse;
   $('courseApply').onclick = () => {

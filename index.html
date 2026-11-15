@@ -50,9 +50,53 @@
   #mySpeed { font-size:52px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; }
   #hud .unit { color:var(--muted); font-size:15px; }
   #hud .meta { margin-left:auto; text-align:right; font-size:12px; color:var(--muted); line-height:1.5; }
-  #list { pointer-events:auto; background:var(--card); border-radius:18px; padding:6px; max-height:32vh;
+  #list, #rpList { pointer-events:auto; background:var(--card); border-radius:18px; padding:6px; max-height:32vh;
     overflow:auto; backdrop-filter:blur(8px); }
-  #list:empty { display:none; }
+  #list:empty, #rpList:empty { display:none; }
+
+  /* 記錄 */
+  #recBar { display:flex; gap:8px; pointer-events:auto; }
+  #recBtn { flex:1; padding:12px; font-size:15px; font-weight:700; border-radius:14px; }
+  #histBtn { padding:12px 16px; font-size:15px; border-radius:14px; }
+  #recBtn.on-rec { background:#e53935; color:#fff; animation:pulse 1.6s infinite; }
+  #recBtn.other { background:rgba(229,57,53,.22); color:#ff8a80; }
+  @keyframes pulse { 50% { opacity:.72; } }
+  #toast { position:fixed; z-index:3000; left:50%; top:calc(env(safe-area-inset-top) + 64px); transform:translateX(-50%);
+    background:#fff; color:#111; padding:10px 16px; border-radius:12px; font-size:14px; box-shadow:0 4px 16px rgba(0,0,0,.4);
+    opacity:0; transition:opacity .25s; pointer-events:none; max-width:90vw; text-align:center; }
+  #toast.show { opacity:1; }
+
+  /* 紀錄清單 */
+  #sheet { position:fixed; inset:0; z-index:2500; background:rgba(0,0,0,.55); display:flex; align-items:flex-end; }
+  #sheet.hidden { display:none; }
+  #sheet .card { width:100%; max-height:80vh; overflow:auto; background:#181818; border-radius:20px 20px 0 0;
+    padding:16px 14px calc(env(safe-area-inset-bottom) + 16px); }
+  #sheet .head { display:flex; align-items:center; margin-bottom:8px; }
+  #sheet .head b { flex:1; font-size:18px; }
+  .sess { background:#232323; border-radius:14px; padding:12px; margin-bottom:10px; }
+  .sess .t { font-weight:700; font-size:16px; }
+  .sess .m { color:var(--muted); font-size:13px; margin:4px 0 10px; }
+  .sess .acts { display:flex; gap:8px; flex-wrap:wrap; }
+  .sess .acts .btn { background:#333; padding:8px 14px; font-size:14px; }
+  .sess .acts .btn.primary { background:var(--accent); color:#111; font-weight:700; }
+  .sess .acts .btn.danger { color:#ff8a80; margin-left:auto; }
+  .hint { color:var(--muted); font-size:12px; line-height:1.5; }
+
+  /* 回放 */
+  #replay { position:fixed; z-index:1000; left:10px; right:10px; bottom:calc(env(safe-area-inset-bottom) + 10px);
+    display:flex; flex-direction:column; gap:8px; }
+  body:not(.replaying) #replay { display:none; }
+  body.replaying #bottom, body.replaying #followBtn, body.replaying #join { display:none !important; }
+  body.replaying .car:not(.rp) { display:none; }
+  .rpctl { background:var(--card); border-radius:18px; padding:10px 14px; backdrop-filter:blur(8px); }
+  .rpctl .r1 { display:flex; align-items:center; gap:8px; }
+  .rpctl .r1 b { flex:1; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rpctl .r2 { display:flex; align-items:center; gap:10px; }
+  #rpPlay { width:46px; height:46px; border-radius:50%; background:var(--accent); color:#111; font-size:18px; padding:0; }
+  #rpTime { flex:1; font-variant-numeric:tabular-nums; font-size:14px; }
+  #rpSlider { width:100%; margin:12px 0 8px; accent-color:var(--accent); }
+  .row.following { outline:2px solid var(--accent); }
+  .row .name small.stat { display:block; margin:2px 0 0; font-size:11px; }
   .row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:12px; }
   .row:active { background:rgba(255,255,255,.08); }
   .row .dot { width:12px; height:12px; border-radius:50%; flex:none; }
@@ -90,6 +134,7 @@
     <label style="display:flex;align-items:center;gap:8px;color:var(--fg);font-size:15px">
       <input id="demoInput" type="checkbox" style="width:auto;margin:0"> 加入 3 台模擬車（一個人測試用）</label>
     <button type="submit">開始分享位置</button>
+    <button type="button" id="histBtn0" style="background:transparent;color:var(--fg);border:1px solid #444;font-weight:500">查看這支手機上的紀錄</button>
     <div id="joinErr"></div>
   </form>
 </div>
@@ -105,11 +150,34 @@
 
 <div id="bottom">
   <div id="list"></div>
+  <div id="recBar">
+    <button id="recBtn" class="btn">● 開始記錄</button>
+    <button id="histBtn" class="btn">紀錄</button>
+  </div>
   <div id="hud">
     <div id="mySpeed">0</div><div class="unit">km/h</div>
     <div class="meta"><div id="gpsInfo">等待 GPS…</div><div id="countInfo"></div></div>
   </div>
 </div>
+
+<div id="replay">
+  <div id="rpList"></div>
+  <div class="rpctl">
+    <div class="r1"><b id="rpTitle"></b><button id="rpClose" class="btn">✕ 結束回放</button></div>
+    <input id="rpSlider" type="range" min="0" max="100" value="0" step="0.1">
+    <div class="r2"><button id="rpPlay" class="btn">▶</button><span id="rpTime">00:00 / 00:00</span><button id="rpRate" class="btn">1×</button></div>
+  </div>
+</div>
+
+<div id="sheet" class="hidden">
+  <div class="card">
+    <div class="head"><b>這支手機上的紀錄</b><button id="sheetClose" class="btn">關閉</button></div>
+    <div id="sessList"></div>
+    <p class="hint">紀錄存在這支手機的瀏覽器裡。清除瀏覽器資料或換手機就會不見，重要的紀錄請匯出備份。
+      CSV 可以用 Excel 開；GPX 是通用的軌跡格式，Google Earth、Strava 和多數 GPS 軟體都能讀。</p>
+  </div>
+</div>
+<div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
@@ -149,6 +217,19 @@
       pitchWithRotate: false, dragRotate: false, attributionControl: true, language: 'zh-Hant',
     });
     m.touchZoomRotate.disableRotation();   // 地圖固定北朝上，箭頭方向才會對
+    const lines = new Map();
+    const drawLine = (key) => {
+      if (!m.isStyleLoaded()) return;       // 樣式載入後 style.load 會再畫一次
+      const { coords, color } = lines.get(key), id = 'rl-line-' + key;
+      const data = { type: 'Feature', geometry: { type: 'LineString', coordinates: coords.map(c => [c[1], c[0]]) } };
+      if (m.getSource(id)) m.getSource(id).setData(data);
+      else {
+        m.addSource(id, { type: 'geojson', data });
+        m.addLayer({ id, type: 'line', source: id, layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: { 'line-color': color, 'line-width': 4, 'line-opacity': 0.7 } });
+      }
+    };
+    m.on('style.load', () => lines.forEach((_v, k) => drawLine(k)));
     $('styleBtn').style.display = '';
     $('styleBtn').textContent = STYLES[styleIdx].name;
     $('styleBtn').onclick = () => {
@@ -175,6 +256,14 @@
         const mk = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([lng, lat]).addTo(m);
         return { el, setPos: (a, b) => mk.setLngLat([b, a]), remove: () => mk.remove() };
       },
+      addLine(key, coords, color) { lines.set(key, { coords, color }); drawLine(key); },
+      clearLines() {
+        for (const k of lines.keys()) {
+          const id = 'rl-line-' + k;
+          try { if (m.getLayer(id)) m.removeLayer(id); if (m.getSource(id)) m.removeSource(id); } catch {}
+        }
+        lines.clear();
+      },
     };
   }
   function makeLeaflet() {
@@ -190,12 +279,16 @@
         const mk = L.marker([lat, lng], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }), zIndexOffset: isMe ? 1000 : 0 }).addTo(m);
         return { get el() { return mk.getElement(); }, setPos: (a, b) => mk.setLatLng([a, b]), remove: () => m.removeLayer(mk) };
       },
+      _lines: [],
+      addLine(_key, coords, color) { this._lines.push(L.polyline(coords, { color, weight: 4, opacity: 0.7 }).addTo(m)); },
+      clearLines() { this._lines.forEach(l => m.removeLayer(l)); this._lines = []; },
     };
   }
 
   let follow = true;
   $('followBtn').onclick = () => { follow = !follow; $('followBtn').classList.toggle('on', follow); if (follow && me.lat) map.panTo(me.lat, me.lng); };
   $('fitBtn').onclick = () => {
+    if (rp) { const a = []; for (const tr of rp.tracks.values()) tr.t.forEach((_, i) => { if (i % 10 === 0) a.push([tr.lat[i], tr.lng[i]]); }); if (a.length) map.fitBounds(a); return; }
     follow = false; $('followBtn').classList.remove('on');
     const pts = [...drivers.values()].filter(d => d.lat != null).map(d => [d.lat, d.lng]);
     if (me.lat != null) pts.push([me.lat, me.lng]);
@@ -207,9 +300,9 @@
   const drivers = new Map();   // 其他車手
   const me = { id: myId, name: '', color: '#ffcc00', lat: null, lng: null, speed: 0, heading: null, acc: null, updatedAt: 0 };
 
-  function carHtml(d, isMe) {
+  function carHtml(d, isMe, extra = '') {
     const stale = !isMe && Date.now() - d.updatedAt > STALE_MS;
-    const cls = ['car', isMe ? 'me' : '', d.heading == null ? 'noheading' : '', stale ? 'stale' : ''].join(' ');
+    const cls = ['car', isMe ? 'me' : '', d.heading == null ? 'noheading' : '', stale ? 'stale' : '', extra].join(' ');
     const rot = d.heading == null ? 0 : d.heading;
     return `<div class="${cls}" style="--c:${d.color}">
       <div class="arrow" style="transform:rotate(${rot}deg)"><svg viewBox="0 0 24 24"><path d="M12 2 L20 21 L12 16.5 L4 21 Z" fill="#fff"/></svg></div>
@@ -248,6 +341,7 @@
     if (!d) { d = { ...s }; drivers.set(s.id, d); }
     else Object.assign(d, s);
     if (d.lat == null) return renderList();
+    recordPoint(d);
     if (!d.marker) ensureMarker(d, false); else moveTo(d, d.lat, d.lng);
     refreshIcon(d, false);
     renderList();
@@ -304,12 +398,14 @@
       $('conn').textContent = '已連線'; $('conn').classList.add('ok');
       client.subscribe(`${NS}/${encodeURIComponent(joined.room)}/+`, { qos: 0 });
       sendPos(true);
+      if (rec) publishCtl();
     });
     const down = () => { connected = false; $('conn').textContent = '斷線，重連中…'; $('conn').classList.remove('ok'); };
     client.on('close', down);
     client.on('offline', down);
     client.on('error', down);
-    client.on('message', (_topic, buf) => {
+    client.on('message', (topic, buf) => {
+      if (topic === ctlTopic()) { let c = null; try { c = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onCtl(c); }
       let s; try { s = JSON.parse(buf.toString()); } catch { return; }
       if (!s || typeof s.id !== 'string' || s.id === myId) return;
       if (s.leave) return removeDriver(s.id);
@@ -351,13 +447,14 @@
 
     const first = me.lat == null;
     me.lat = c.latitude; me.lng = c.longitude;
-    if (first) { ensureMarker(me, true); map.setView(me.lat, me.lng, 16); }
+    if (first) { ensureMarker(me, true); if (!rp) map.setView(me.lat, me.lng, 16); }
     else moveTo(me, me.lat, me.lng);
     refreshIcon(me, true);
-    if (follow) map.panTo(me.lat, me.lng);
+    if (follow && !rp) map.panTo(me.lat, me.lng);
 
     $('mySpeed').textContent = Math.round(me.speed);
     $('gpsInfo').textContent = `GPS 精度 ±${Math.round(c.accuracy)} m`;
+    recordPoint(me);
     sendPos();
   }
   function sendPos(force) {
@@ -421,7 +518,365 @@
     }, 1000);
   }
 
+  // =====================================================================
+  // 記錄：房主按「開始記錄」→ 房主的手機把房間內每個人的位置/速度存起來 → 按「停止」
+  // 房間的記錄狀態用 MQTT retained 訊息同步（後加入的人也看得到）
+  // =====================================================================
+  const REC_EVERY_MS = 900;          // 每人約每秒存一筆
+  const HOST_TIMEOUT_MS = 60_000;    // 房主 60 秒沒心跳 → 視為已離開，別人可以重新開始
+  let ctl = { state: 'idle' };       // 房間目前的記錄狀態
+  let rec = null;                    // 我是房主且正在記錄時才有值
+  const ctlTopic = () => joined ? `${NS}/${encodeURIComponent(joined.room)}/_ctl` : '';
+
+  function ctlActive() { return ctl.state === 'rec' && Date.now() - (ctl.at || 0) < HOST_TIMEOUT_MS; }
+  function publishCtl() {
+    if (!connected) return;
+    const msg = rec
+      ? { state: 'rec', sid: rec.sid, host: myId, hostName: me.name, startedAt: rec.startedAt, at: Date.now() }
+      : { state: 'idle', at: Date.now() };
+    client.publish(ctlTopic(), JSON.stringify(msg), { qos: 1, retain: true });
+    ctl = msg;
+  }
+  setInterval(() => { if (rec) publishCtl(); }, 10_000);   // 房主心跳
+
+  function onCtl(c) {
+    const prev = ctl;
+    ctl = (c && typeof c === 'object') ? c : { state: 'idle' };
+    // 我是房主、但頁面重新整理過 → 接續原本那場記錄
+    if (ctl.state === 'rec' && ctl.host === myId && !rec && ctlActive()) startRec(ctl.sid, ctl.startedAt);
+    // 別人接手了（例如我斷線太久）→ 我這邊停下來並存檔
+    if (rec && ctl.state === 'rec' && ctl.host !== myId) stopRec(true);
+    if (!rec && prev.state !== ctl.state && ctl.host !== myId) {
+      if (ctl.state === 'rec' && ctlActive()) toast(`${ctl.hostName || '房主'} 開始記錄了`);
+      else if (prev.state === 'rec') toast('記錄已結束');
+    }
+    renderRec();
+  }
+
+  async function startRec(resumeSid, resumeStartedAt) {
+    if (rec) return;
+    const sid = resumeSid || `${new Date().toISOString().replace(/[:.]/g, '-')}-${myId.slice(-4)}`;
+    const old = resumeSid ? await DB.getSession(sid).catch(() => null) : null;
+    rec = {
+      sid, room: joined.room, hostName: me.name, startedAt: resumeStartedAt || Date.now(), endedAt: null,
+      drivers: (old && old.drivers) || {}, count: (old && old.count) || 0, buf: [], last: {},
+    };
+    recordPoint(me);
+    for (const d of drivers.values()) if (Date.now() - d.updatedAt < STALE_MS) recordPoint(d);
+    publishCtl();
+    await flushRec();
+    renderRec();
+    if (!resumeSid) toast('開始記錄，房間內所有人都看得到「記錄中」');
+  }
+  async function stopRec(silent) {
+    if (!rec) return;
+    rec.endedAt = Date.now();
+    await flushRec();
+    const n = Object.keys(rec.drivers).length, dur = rec.endedAt - rec.startedAt;
+    rec = null;
+    if (!silent) publishCtl();
+    renderRec();
+    toast(`已儲存紀錄：${fmtDur(dur)}，${n} 人`);
+  }
+  function recordPoint(d) {
+    if (!rec || d.lat == null) return;
+    const now = Date.now();
+    if (now - (rec.last[d.id] || 0) < REC_EVERY_MS) return;
+    rec.last[d.id] = now;
+    rec.drivers[d.id] = { name: d.name || '車手', color: d.color };
+    rec.buf.push([now, d.id, +d.lat.toFixed(6), +d.lng.toFixed(6),
+      Math.round((d.speed || 0) * 10) / 10, d.heading == null ? null : Math.round(d.heading)]);
+    rec.count++;
+  }
+  let flushing = false;
+  async function flushRec() {
+    if (!rec || flushing) return;
+    flushing = true;
+    const pts = rec.buf; rec.buf = [];
+    try {
+      if (pts.length) await DB.addChunk(rec.sid, pts);
+      await DB.putSession({ sid: rec.sid, room: rec.room, hostName: rec.hostName, startedAt: rec.startedAt,
+        endedAt: rec.endedAt || Date.now(), drivers: rec.drivers, count: rec.count, done: !!rec.endedAt });
+    } catch (e) {
+      rec.buf = pts.concat(rec.buf);   // 寫入失敗就留著下次再寫
+      console.warn('記錄寫入失敗', e);
+    }
+    flushing = false;
+  }
+  setInterval(flushRec, 5000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushRec(); });
+
+  function renderRec() {
+    const b = $('recBtn');
+    b.classList.remove('on-rec', 'other');
+    if (rec) {
+      b.classList.add('on-rec');
+      b.textContent = `■ 停止記錄　${fmtDur(Date.now() - rec.startedAt)}`;
+    } else if (ctlActive()) {
+      b.classList.add('other');
+      b.textContent = `● ${ctl.hostName || '房主'} 記錄中　${fmtDur(Date.now() - (ctl.startedAt || Date.now()))}`;
+    } else {
+      b.textContent = '● 開始記錄';
+    }
+  }
+  setInterval(renderRec, 1000);
+  $('recBtn').onclick = () => {
+    if (rec) { if (confirm('確定要停止記錄嗎？')) stopRec(); return; }
+    if (ctlActive()) { toast(`${ctl.hostName || '房主'} 正在記錄，只有他可以停止`); return; }
+    if (!connected) { toast('還沒連上伺服器，請稍等'); return; }
+    startRec();
+  };
+
+  // ---------- 儲存（IndexedDB，存在這支手機的瀏覽器裡） ----------
+  const DB = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open('racelive', 1);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        db.createObjectStore('sessions', { keyPath: 'sid' });
+        db.createObjectStore('chunks', { autoIncrement: true }).createIndex('sid', 'sid');
+      };
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => { dbp = null; rej(r.error); };
+    }));
+    const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const done = (t) => new Promise((res, rej) => { t.oncomplete = res; t.onerror = t.onabort = () => rej(t.error); });
+    return {
+      async putSession(s) { const t = (await open()).transaction('sessions', 'readwrite'); t.objectStore('sessions').put(s); return done(t); },
+      async addChunk(sid, points) { const t = (await open()).transaction('chunks', 'readwrite'); t.objectStore('chunks').add({ sid, points }); return done(t); },
+      async getSession(sid) { return req((await open()).transaction('sessions').objectStore('sessions').get(sid)); },
+      async listSessions() { return req((await open()).transaction('sessions').objectStore('sessions').getAll()); },
+      async getPoints(sid) {
+        const chunks = await req((await open()).transaction('chunks').objectStore('chunks').index('sid').getAll(sid));
+        return chunks.flatMap(c => c.points);
+      },
+      async deleteSession(sid) {
+        const t = (await open()).transaction(['sessions', 'chunks'], 'readwrite');
+        t.objectStore('sessions').delete(sid);
+        const r = t.objectStore('chunks').index('sid').getAllKeys(sid);
+        r.onsuccess = () => r.result.forEach(k => t.objectStore('chunks').delete(k));
+        return done(t);
+      },
+    };
+  })();
+
+  // 把一場紀錄整理成每個人一條軌跡，並算出最高速、距離、平均速度
+  async function loadSession(sid) {
+    const meta = await DB.getSession(sid);
+    const pts = (await DB.getPoints(sid)).sort((a, b) => a[0] - b[0]);
+    const tracks = new Map();
+    for (const [t, id, lat, lng, spd, hdg] of pts) {
+      let tr = tracks.get(id);
+      if (!tr) {
+        const info = (meta.drivers && meta.drivers[id]) || {};
+        tr = { id, name: info.name || id, color: info.color || colorFor(id), t: [], lat: [], lng: [], spd: [], hdg: [], max: 0, dist: 0 };
+        tracks.set(id, tr);
+      }
+      const n = tr.t.length;
+      if (n) {
+        const d = haversine({ lat: tr.lat[n - 1], lng: tr.lng[n - 1] }, { lat, lng });
+        if (t - tr.t[n - 1] < 15_000 && d < 500) tr.dist += d;   // 斷訊造成的跳點不算距離
+      }
+      tr.t.push(t); tr.lat.push(lat); tr.lng.push(lng); tr.spd.push(spd); tr.hdg.push(hdg);
+      if (spd > tr.max) tr.max = spd;
+    }
+    for (const tr of tracks.values()) {
+      const secs = (tr.t[tr.t.length - 1] - tr.t[0]) / 1000;
+      tr.avg = secs > 0 ? (tr.dist / secs) * 3.6 : 0;
+    }
+    const t0 = pts.length ? pts[0][0] : meta.startedAt, t1 = pts.length ? pts[pts.length - 1][0] : meta.endedAt;
+    return { meta, tracks, t0, t1, count: pts.length };
+  }
+
+  // ---------- 紀錄清單 ----------
+  async function openSheet() {
+    $('sheet').classList.remove('hidden');
+    $('sessList').innerHTML = '<p class="hint">讀取中…</p>';
+    let list = [];
+    try { list = await DB.listSessions(); } catch { $('sessList').innerHTML = '<p class="hint">這個瀏覽器無法存取紀錄（可能是無痕模式）。</p>'; return; }
+    list.sort((a, b) => b.startedAt - a.startedAt);
+    if (!list.length) { $('sessList').innerHTML = '<p class="hint">還沒有紀錄。加入房間後按「開始記錄」就會存在這支手機上。</p>'; return; }
+    $('sessList').innerHTML = list.map(s => {
+      const live = rec && rec.sid === s.sid;
+      return `<div class="sess" data-sid="${esc(s.sid)}">
+        <div class="t">${fmtDate(s.startedAt)}　#${esc(s.room)}${live ? '　<span style="color:#ff6b6b">● 記錄中</span>' : ''}</div>
+        <div class="m">${fmtDur((s.endedAt || Date.now()) - s.startedAt)} · ${Object.keys(s.drivers || {}).length} 人 · ${s.count || 0} 筆
+          <br>${Object.values(s.drivers || {}).map(d => esc(d.name)).join('、')}</div>
+        <div class="acts">
+          <button class="btn primary" data-act="play">▶ 回放</button>
+          <button class="btn" data-act="csv">匯出 CSV</button>
+          <button class="btn" data-act="gpx">匯出 GPX</button>
+          ${live ? '' : '<button class="btn danger" data-act="del">刪除</button>'}
+        </div></div>`;
+    }).join('');
+  }
+  $('histBtn').onclick = openSheet;
+  $('histBtn0').onclick = openSheet;
+  $('sheetClose').onclick = () => $('sheet').classList.add('hidden');
+  $('sheet').onclick = (e) => { if (e.target.id === 'sheet') $('sheet').classList.add('hidden'); };
+  $('sessList').onclick = async (e) => {
+    const btn = e.target.closest('button[data-act]'); if (!btn) return;
+    const sid = btn.closest('.sess').dataset.sid, act = btn.dataset.act;
+    if (rec && rec.sid === sid) await flushRec();
+    if (act === 'del') {
+      if (!confirm('確定刪除這筆紀錄？刪除後無法復原。')) return;
+      await DB.deleteSession(sid); openSheet(); return;
+    }
+    const data = await loadSession(sid);
+    if (!data.count) { toast('這筆紀錄沒有資料'); return; }
+    const base = `race-${data.meta.room}-${fmtFileDate(data.meta.startedAt)}`;
+    if (act === 'csv') downloadFile(base + '.csv', toCsv(data), 'text/csv;charset=utf-8');
+    if (act === 'gpx') downloadFile(base + '.gpx', toGpx(data), 'application/gpx+xml');
+    if (act === 'play') { $('sheet').classList.add('hidden'); startReplay(data); }
+  };
+
+  // ---------- 匯出 ----------
+  function toCsv({ meta, tracks }) {
+    const rows = [['時間', '經過秒數', '車手ID', '車手', '緯度', '經度', '車速(km/h)', '方向(度)']];
+    const all = [];
+    for (const tr of tracks.values()) tr.t.forEach((t, i) => all.push([t, tr, i]));
+    all.sort((a, b) => a[0] - b[0]);
+    for (const [t, tr, i] of all) {
+      rows.push([new Date(t).toISOString(), ((t - meta.startedAt) / 1000).toFixed(1), tr.id, tr.name,
+        tr.lat[i], tr.lng[i], tr.spd[i], tr.hdg[i] == null ? '' : tr.hdg[i]]);
+    }
+    const cell = (v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+    return '﻿' + rows.map(r => r.map(cell).join(',')).join('\n');   // BOM 讓 Excel 正確顯示中文
+  }
+  function toGpx({ meta, tracks }) {
+    const x = (s) => String(s).replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[ch]));
+    const trks = [...tracks.values()].map(tr => `  <trk><name>${x(tr.name)}</name><trkseg>\n` +
+      tr.t.map((t, i) => `    <trkpt lat="${tr.lat[i]}" lon="${tr.lng[i]}"><time>${new Date(t).toISOString()}</time>` +
+        `<extensions><speed>${(tr.spd[i] / 3.6).toFixed(2)}</speed>${tr.hdg[i] == null ? '' : `<course>${tr.hdg[i]}</course>`}</extensions></trkpt>`).join('\n') +
+      `\n  </trkseg></trk>`).join('\n');
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Race Live" xmlns="http://www.topografix.com/GPX/1/1">\n` +
+      `  <metadata><name>${x('#' + meta.room + ' ' + fmtDate(meta.startedAt))}</name><time>${new Date(meta.startedAt).toISOString()}</time></metadata>\n${trks}\n</gpx>\n`;
+  }
+  function downloadFile(name, text, type) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
+  }
+
+  // ---------- 回放 ----------
+  const RATES = [1, 2, 4, 8, 16, 32];
+  let rp = null, rp0gen = 0;
+  function startReplay(data) {
+    stopReplay();
+    const { meta, tracks, t0, t1 } = data;
+    rp = { gen: (rp0gen = (rp0gen || 0) + 1), meta, tracks, t0, t1, t: t0, playing: false, rateIdx: 2, lastNow: performance.now(), lastUi: 0, follow: null, markers: new Map() };
+    document.body.classList.add('replaying');
+    $('rpTitle').textContent = `#${meta.room}　${fmtDate(meta.startedAt)}`;
+    $('rpSlider').max = ((t1 - t0) / 1000).toFixed(1);
+    $('rpRate').textContent = RATES[rp.rateIdx] + '×';
+    const all = [];
+    for (const tr of tracks.values()) {
+      const coords = tr.t.map((_, i) => [tr.lat[i], tr.lng[i]]);
+      map.addLine(tr.id, coords, tr.color);
+      for (let i = 0; i < coords.length; i += Math.max(1, Math.floor(coords.length / 50))) all.push(coords[i]);
+      rp.markers.set(tr.id, map.addMarker(tr.lat[0], tr.lng[0], '', false));
+    }
+    if (all.length) map.fitBounds(all);
+    rpRender(true);
+    const gen = rp.gen;
+    const loop = (now) => { if (!rp || rp.gen !== gen) return; rpTick(now); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+  function stopReplay() {
+    if (!rp) return;
+    rp.markers.forEach(m => m.remove());
+    map.clearLines();
+    rp = null;
+    document.body.classList.remove('replaying');
+    if (!joined) $('join').style.display = '';
+  }
+  // 取出某人在時間 t 的位置（前後兩筆之間做內插）
+  function sampleAt(tr, t) {
+    const ts = tr.t, n = ts.length;
+    if (!n || t < ts[0]) return null;
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ts[mid] <= t) lo = mid; else hi = mid - 1; }
+    const i = lo;
+    if (i === n - 1 || ts[i + 1] - ts[i] > 15_000) {
+      return { lat: tr.lat[i], lng: tr.lng[i], spd: t - ts[i] > 3000 ? 0 : tr.spd[i], hdg: tr.hdg[i], stale: t - ts[i] > 5000 };
+    }
+    const k = (t - ts[i]) / (ts[i + 1] - ts[i]);
+    const h0 = tr.hdg[i], h1 = tr.hdg[i + 1];
+    let hdg = h0 == null ? h1 : h1 == null ? h0 : h0 + ((((h1 - h0) % 360) + 540) % 360 - 180) * k;
+    if (hdg != null) hdg = (hdg + 360) % 360;
+    return { lat: tr.lat[i] + (tr.lat[i + 1] - tr.lat[i]) * k, lng: tr.lng[i] + (tr.lng[i + 1] - tr.lng[i]) * k,
+      spd: tr.spd[i] + (tr.spd[i + 1] - tr.spd[i]) * k, hdg, stale: false };
+  }
+  function rpTick(now) {
+    if (!rp) return;
+    if (rp.playing) {
+      rp.t += (now - rp.lastNow) * RATES[rp.rateIdx];
+      if (rp.t >= rp.t1) { rp.t = rp.t1; rp.playing = false; $('rpPlay').textContent = '▶'; }
+    }
+    rp.lastNow = now;
+    rpRender(false, now);
+  }
+  function rpRender(force, now = performance.now()) {
+    const ui = force || now - rp.lastUi > 200;   // 文字和清單每 0.2 秒更新一次就夠
+    const rows = [];
+    for (const tr of rp.tracks.values()) {
+      const s = sampleAt(tr, rp.t), mk = rp.markers.get(tr.id);
+      const el = mk.el;
+      if (!s) { if (el) el.style.display = 'none'; continue; }
+      if (el) el.style.display = '';
+      mk.setPos(s.lat, s.lng);
+      if (ui && el) {
+        el.innerHTML = carHtml({ name: tr.name, color: tr.color, speed: s.spd, heading: s.hdg, updatedAt: s.stale ? 0 : Date.now() }, false, 'rp');
+      }
+      rows.push({ tr, s });
+      if (rp.follow === tr.id && ui) map.panTo(s.lat, s.lng);
+    }
+    if (!ui) return;
+    rp.lastUi = now;
+    const el = (rp.t - rp.t0) / 1000;
+    if (!rp.dragging) $('rpSlider').value = el.toFixed(1);
+    $('rpTime').textContent = `${fmtClock(el)} / ${fmtClock((rp.t1 - rp.t0) / 1000)}`;
+    rows.sort((a, b) => (b.s.stale ? -1 : b.s.spd) - (a.s.stale ? -1 : a.s.spd));
+    $('rpList').innerHTML = rows.map(({ tr, s }) => `<div class="row ${s.stale ? 'stale' : ''} ${rp.follow === tr.id ? 'following' : ''}" data-id="${esc(tr.id)}">
+      <span class="dot" style="background:${tr.color}"></span>
+      <span class="name">${esc(tr.name)}<small class="stat">最高 ${Math.round(tr.max)} · 平均 ${Math.round(tr.avg)} km/h · ${fmtDist(tr.dist)}</small></span>
+      <span class="spd">${Math.round(s.spd)} km/h</span></div>`).join('');
+  }
+  $('rpPlay').onclick = () => {
+    if (!rp) return;
+    if (!rp.playing && rp.t >= rp.t1) rp.t = rp.t0;
+    rp.playing = !rp.playing;
+    rp.lastNow = performance.now();
+    $('rpPlay').textContent = rp.playing ? '❚❚' : '▶';
+  };
+  $('rpRate').onclick = () => { if (!rp) return; rp.rateIdx = (rp.rateIdx + 1) % RATES.length; $('rpRate').textContent = RATES[rp.rateIdx] + '×'; };
+  $('rpSlider').oninput = () => { if (!rp) return; rp.dragging = true; rp.t = rp.t0 + (+$('rpSlider').value) * 1000; rpRender(true); };
+  $('rpSlider').onchange = () => { if (rp) rp.dragging = false; };
+  $('rpClose').onclick = stopReplay;
+  $('rpList').onclick = (e) => {
+    const row = e.target.closest('.row'); if (!row || !rp) return;
+    rp.follow = rp.follow === row.dataset.id ? null : row.dataset.id;
+    toast(rp.follow ? '鏡頭跟著這台車' : '取消跟隨');
+    rpRender(true);
+  };
+
+  // ---------- 小提示 ----------
+  let toastTimer = null;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
   // ---------- 工具 ----------
+  function fmtDur(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  }
+  const fmtClock = (sec) => fmtDur(sec * 1000);
+  function fmtDate(t) { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
+  function fmtFileDate(t) { const d = new Date(t), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; }
   function haversine(a, b) {
     const R = 6371000, toR = Math.PI / 180;
     const dLat = (b.lat - a.lat) * toR, dLng = (b.lng - a.lng) * toR;

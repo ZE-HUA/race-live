@@ -1079,13 +1079,14 @@
   }
   async function stopRec(silent) {
     if (!rec) return;
-    rec.endedAt = Date.now();
-    await flushRec();
-    const n = Object.keys(rec.drivers).length, dur = rec.endedAt - rec.startedAt;
-    rec = null;
+    const r = rec;
+    r.endedAt = Date.now();
+    rec = null;                     // 先停止收集，再把最後一段和結束時間寫進去
     if (!silent) publishCtl();
     renderRec();
-    toast(`已儲存紀錄：${fmtDur(dur)}，${n} 人`);
+    const ok = await flushRec(r) || await flushRec(r);   // 失敗就再試一次
+    const n = Object.keys(r.drivers).length, dur = r.endedAt - r.startedAt;
+    toast(ok ? `已儲存紀錄：${fmtDur(dur)}，${n} 人` : '紀錄最後一段寫入失敗，請稍後到「紀錄」確認');
   }
   function recordPoint(d) {
     if (!rec || d.lat == null) return;
@@ -1097,20 +1098,25 @@
       Math.round((d.speed || 0) * 10) / 10, d.heading == null ? null : Math.round(d.heading)]);
     rec.count++;
   }
-  let flushing = false;
-  async function flushRec() {
-    if (!rec || flushing) return;
-    flushing = true;
-    const pts = rec.buf; rec.buf = [];
-    try {
-      if (pts.length) await DB.addChunk(rec.sid, pts);
-      await DB.putSession({ sid: rec.sid, room: rec.room, hostName: rec.hostName, startedAt: rec.startedAt,
-        endedAt: rec.endedAt || Date.now(), drivers: rec.drivers, count: rec.count, done: !!rec.endedAt });
-    } catch (e) {
-      rec.buf = pts.concat(rec.buf);   // 寫入失敗就留著下次再寫
-      console.warn('記錄寫入失敗', e);
-    }
-    flushing = false;
+  // 寫入手機：每次寫入都綁定「那一場」記錄（r），同一時間只會有一個寫入；
+  // 有寫入正在進行時，後來的會排隊等它完成（之前會直接跳過，停止記錄時可能卡住之後所有寫入）
+  let flushing = null;
+  async function flushRec(r = rec) {
+    if (!r) return;
+    while (flushing) { try { await flushing; } catch {} }
+    flushing = (async () => {
+      const pts = r.buf; r.buf = [];
+      try {
+        if (pts.length) await DB.addChunk(r.sid, pts);
+        await DB.putSession({ sid: r.sid, room: r.room, hostName: r.hostName, startedAt: r.startedAt,
+          endedAt: r.endedAt || Date.now(), drivers: r.drivers, count: r.count, done: !!r.endedAt });
+      } catch (e) {
+        r.buf = pts.concat(r.buf);   // 寫入失敗就留著下次再寫
+        console.warn('記錄寫入失敗', e);
+        throw e;
+      }
+    })();
+    try { await flushing; return true; } catch { return false; } finally { flushing = null; }
   }
   setInterval(flushRec, 5000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushRec(); });

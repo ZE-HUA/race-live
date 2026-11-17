@@ -631,7 +631,7 @@
     }
     else Object.assign(d, s);
     if (d.lat == null) return renderList();
-    recordPoint(d);
+    recordPoint(d, d.recT);
     pushTrail(d.id, d.lat, d.lng);
     if (!d.marker) ensureMarker(d, false); else moveTo(d, d.lat, d.lng);
     refreshIcon(d, false);
@@ -750,6 +750,7 @@
     const c = client = mqtt.connect(BROKER, {
       clientId: 'rl-' + myId + '-' + Math.random().toString(36).slice(2, 6),
       clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 10000,
+      queueQoSZero: false,   // 斷線期間的即時位置不排隊補送（軌跡改由「補傳」處理）
       will: { topic: topicOf(myId), payload: JSON.stringify({ id: myId, leave: true }), qos: 0, retain: false },
     });
     c.on('connect', () => {
@@ -762,6 +763,7 @@
       if (!roomDecided) { clearTimeout(decideTimer); decideTimer = setTimeout(() => { if (client === c && !roomDecided) decideRoom(null); }, 1500); }
       else if (amHost) publishRoom();
       if (rec) publishCtl();
+      setTimeout(trkSend, 2000);   // 網路恢復：補傳斷線期間的軌跡
     });
     const down = () => { if (client !== c) return; connected = false; $('conn').textContent = '斷線，重連中…'; $('conn').classList.remove('ok'); };
     c.on('close', down);
@@ -770,6 +772,11 @@
     c.on('message', (topic, buf) => {
       if (client !== c) return;
       if (topic === ctlTopic()) { let cm = null; try { cm = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onCtl(cm); }
+      const leaf = topic.slice(topic.lastIndexOf('/') + 1);
+      if (leaf.startsWith('trk-') || leaf.startsWith('ack-')) {
+        let m = null; try { m = JSON.parse(buf.toString()); } catch {}
+        return leaf.startsWith('trk-') ? onTrk(m) : (leaf === 'ack-' + myId && onAck(m));
+      }
       if (topic.slice(topic.lastIndexOf('/') + 1).startsWith('res-')) { let rr = null; try { rr = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onResult(rr); }
       if (topic === roomTopic()) { let rm = null; try { rm = buf.length ? JSON.parse(buf.toString()) : null; } catch {} return onRoom(rm); }
       let s; try { s = JSON.parse(buf.toString()); } catch { return; }
@@ -782,11 +789,15 @@
       }
       const lat = +s.lat, lng = +s.lng;
       if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
+      const id = s.id.slice(0, 40), recT = isFinite(+s.ts) && +s.ts > 0 ? senderToLocal(id, +s.ts) : Date.now();
+      const spd = Math.min(500, Math.max(0, +s.speed || 0)), hdg = isFinite(+s.heading) && s.heading !== null ? +s.heading : null;
+      if (Date.now() - recT > 8000) {   // 延遲送達的舊位置：不更新地圖，只放進紀錄的正確時間點
+        if (rec) recAdd(rec, id, String(s.name || '車手').slice(0, 20), colorFor(id), recT, lat, lng, spd, hdg);
+        return;
+      }
       upsertDriver({
-        id: s.id.slice(0, 40), name: String(s.name || '車手').slice(0, 20), color: colorFor(s.id),
-        lat, lng, speed: Math.min(500, Math.max(0, +s.speed || 0)),
-        heading: isFinite(+s.heading) && s.heading !== null ? +s.heading : null,
-        acc: +s.acc || null, updatedAt: Date.now(),
+        id, name: String(s.name || '車手').slice(0, 20), color: colorFor(s.id),
+        lat, lng, speed: spd, heading: hdg, acc: +s.acc || null, updatedAt: Date.now(), recT,
       });
     });
   }
@@ -797,8 +808,9 @@
   // 房主：第一個進入房間的人。只有房主能開始/停止記錄；房主離開 → 房間結束
   // 房間資訊用 retained 訊息存在 _room，房主每 10 秒更新一次（心跳）
   // =====================================================================
-  const ROOM_ALIVE_MS = 45_000;     // 房主超過 45 秒沒心跳 → 視為不在
-  const HOST_GRACE_MS = 20_000;     // 房主斷線後等 20 秒（重新整理、短暫斷網）再結束房間
+  // 山區常常沒訊號：房主斷線時不結束房間，保留 10 分鐘等他回來（只有房主親自按「離開」才立刻結束）
+  const ROOM_ALIVE_MS = 10 * 60_000;   // 房主超過 10 分鐘沒心跳 → 視為不在
+  const HOST_GRACE_MS = 10 * 60_000;   // 房主斷線後等 10 分鐘再結束房間
   let room = null, amHost = false, roomDecided = false, decideTimer = null;
   let hostGoneTimer = null, lastHostSeen = 0;
   const roomTopic = () => joined ? `${NS}/${encodeURIComponent(joined.room)}/_room` : '';
@@ -841,7 +853,7 @@
       if (!resume) { ctl = { state: 'idle' }; client.publish(ctlTopic(), JSON.stringify({ state: 'idle', at: Date.now() }), { qos: 1, retain: true }); }
       toast(resume ? '已回到房間，你是房主 👑' : '你建立了這個房間，你是房主 👑');
     }
-    tryResume(); renderRole(); renderRec(); renderList(); applyRoomMode();
+    tryResume(); renderRole(); renderRec(); renderList(); applyRoomMode(); trkSync();
   }
   function becomePlayer(m) {
     amHost = false; room = m; lastHostSeen = Date.now();
@@ -851,8 +863,8 @@
   }
   function hostGone() {
     if (hostGoneTimer || amHost || !room) return;
-    toast(`房主 ${room.hostName || ''} 斷線，等待重新連線…`);
-    hostGoneTimer = setTimeout(() => { hostGoneTimer = null; roomEnded(`房主 ${room ? room.hostName || '' : ''} 已離開，房間結束`); }, HOST_GRACE_MS);
+    toast(`房主 ${room.hostName || ''} 訊號中斷，房間保留 10 分鐘等他回來，大家照常定位、記錄`);
+    hostGoneTimer = setTimeout(() => { hostGoneTimer = null; roomEnded(`房主 ${room ? room.hostName || '' : ''} 超過 10 分鐘沒有回來，房間結束`); }, HOST_GRACE_MS);
   }
   function cancelHostGone() {
     if (!hostGoneTimer) return;
@@ -860,7 +872,7 @@
   }
   // 備援：完全收不到房主的任何訊息（例如他沒網路了），也結束房間
   setInterval(() => {
-    if (joined && roomDecided && !amHost && room && Date.now() - lastHostSeen > ROOM_ALIVE_MS + HOST_GRACE_MS)
+    if (joined && roomDecided && !amHost && room && Date.now() - lastHostSeen > HOST_GRACE_MS + 60_000)
       roomEnded('房主已經很久沒有回應，房間結束');
   }, 5_000);
   async function roomEnded(msg) {
@@ -908,6 +920,7 @@
     pushTrail(myId, me.lat, me.lng);
     p2pOnFix(c.latitude, c.longitude, t, c.accuracy);
     camTrackPoint();
+    myTrkPoint();
     sendPos();
   }
   function sendPos(force) {
@@ -916,7 +929,7 @@
     if (!connected || me.lat == null) return;
     lastSent = now;
     client.publish(topicOf(myId), JSON.stringify({
-      id: myId, name: me.name, lat: +me.lat.toFixed(6), lng: +me.lng.toFixed(6),
+      id: myId, name: me.name, ts: Date.now(), lat: +me.lat.toFixed(6), lng: +me.lng.toFixed(6),
       speed: Math.round(me.speed * 10) / 10, heading: me.heading == null ? null : Math.round(me.heading), acc: me.acc == null ? null : Math.round(me.acc),
     }), { qos: 0 });
   }
@@ -968,6 +981,7 @@
     wakeLock = null;
     if (client) {
       const c = client;
+      finishMyTrk();                // 玩家離開：把還沒傳到的軌跡送出去（自己手機上也有一份）
       if (amHost && connected) {   // 房主離開：關閉房間、清掉記錄狀態
         try {
           c.publish(roomTopic(), JSON.stringify({ state: 'closed', host: myId, at: Date.now() }), { qos: 1, retain: true });
@@ -1023,7 +1037,7 @@
   // 房間的記錄狀態用 MQTT retained 訊息同步（後加入的人也看得到）
   // =====================================================================
   const REC_EVERY_MS = 900;          // 每人約每秒存一筆
-  const HOST_TIMEOUT_MS = 60_000;    // 房主 60 秒沒心跳 → 視為已離開，別人可以重新開始
+  const HOST_TIMEOUT_MS = 10 * 60_000;   // 房主 10 分鐘沒心跳 → 視為記錄已中止（山區斷線不會誤判）
   let ctl = { state: 'idle' };       // 房間目前的記錄狀態
   let ctlFirst = true;               // 加入房間後收到的第一則狀態（retained）才用來判斷是否接續
   let rec = null;                    // 我是房主且正在記錄時才有值
@@ -1059,7 +1073,7 @@
       if (ctl.state === 'rec' && ctlActive()) toast(`${ctl.hostName || '房主'} 開始記錄了`);
       else if (prev.state === 'rec') toast('記錄已結束');
     }
-    renderRec();
+    renderRec(); trkSync();
   }
 
   async function startRec(resumeSid, resumeStartedAt) {
@@ -1068,8 +1082,9 @@
     const old = resumeSid ? await DB.getSession(sid).catch(() => null) : null;
     rec = {
       sid, room: joined.room, hostName: me.name, startedAt: resumeStartedAt || Date.now(), endedAt: null,
-      drivers: (old && old.drivers) || {}, count: (old && old.count) || 0, buf: [], last: {},
+      drivers: (old && old.drivers) || {}, count: (old && old.count) || 0, buf: [], times: {},
     };
+    if (old) await loadTimes(rec);   // 接續記錄：先載入已存的時間點，避免補傳時重複
     recordPoint(me);
     for (const d of drivers.values()) if (Date.now() - d.updatedAt < STALE_MS) recordPoint(d);
     publishCtl();
@@ -1085,18 +1100,35 @@
     if (!silent) publishCtl();
     renderRec();
     const ok = await flushRec(r) || await flushRec(r);   // 失敗就再試一次
+    recentRecs.set(r.sid, r);                             // 結束後 15 分鐘內，還沒傳到的軌跡補傳進來會合併
+    setTimeout(() => recentRecs.delete(r.sid), 15 * 60_000);
     const n = Object.keys(r.drivers).length, dur = r.endedAt - r.startedAt;
     toast(ok ? `已儲存紀錄：${fmtDur(dur)}，${n} 人` : '紀錄最後一段寫入失敗，請稍後到「紀錄」確認');
   }
-  function recordPoint(d) {
+  function recordPoint(d, t = Date.now()) {
     if (!rec || d.lat == null) return;
-    const now = Date.now();
-    if (now - (rec.last[d.id] || 0) < REC_EVERY_MS) return;
-    rec.last[d.id] = now;
-    rec.drivers[d.id] = { name: d.name || '車手', color: d.color };
-    rec.buf.push([now, d.id, +d.lat.toFixed(6), +d.lng.toFixed(6),
-      Math.round((d.speed || 0) * 10) / 10, d.heading == null ? null : Math.round(d.heading)]);
-    rec.count++;
+    recAdd(rec, d.id, d.name, d.color, t, d.lat, d.lng, d.speed, d.heading);
+  }
+  // 把一個點加進某場紀錄（r）：依時間排序，同一人 0.7 秒內已經有點就略過（即時位置和補傳的軌跡可能重複）
+  function recAdd(r, id, name, color, t, lat, lng, spd, hdg) {
+    if (!r || !isFinite(t) || !isFinite(lat) || !isFinite(lng)) return false;
+    if (t < r.startedAt - 5000 || t > (r.endedAt || Date.now()) + 5000) return false;
+    const ts = r.times[id] || (r.times[id] = []);
+    let lo = 0, hi = ts.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] < t) lo = mid + 1; else hi = mid; }
+    if ((lo < ts.length && ts[lo] - t < REC_EVERY_MS * 0.78) || (lo > 0 && t - ts[lo - 1] < REC_EVERY_MS * 0.78)) return false;
+    ts.splice(lo, 0, t);
+    r.drivers[id] = { name: name || (r.drivers[id] && r.drivers[id].name) || '車手', color: color || colorFor(id) };
+    r.buf.push([Math.round(t), id, +(+lat).toFixed(6), +(+lng).toFixed(6), Math.round((+spd || 0) * 10) / 10, hdg == null ? null : Math.round(hdg)]);
+    r.count++;
+    return true;
+  }
+  // 各支手機的時鐘可能有誤差：用「收到時間 − 對方送出時間」的最小值當作時差，把對方的時間換成本機時間
+  const clockOff = new Map();
+  function senderToLocal(id, ts) {
+    let a = clockOff.get(id); if (!a) clockOff.set(id, a = []);
+    a.push(Date.now() - ts); if (a.length > 40) a.shift();
+    return ts + Math.min(...a);
   }
   // 寫入手機：每次寫入都綁定「那一場」記錄（r），同一時間只會有一個寫入；
   // 有寫入正在進行時，後來的會排隊等它完成（之前會直接跳過，停止記錄時可能卡住之後所有寫入）
@@ -1146,6 +1178,93 @@
     if (!connected) { toast('還沒連上伺服器，請稍等'); return; }
     startRec();
   };
+
+  // =====================================================================
+  // 斷線補傳：房主記錄期間，玩家自己的手機也記一份軌跡（「我的軌跡」），
+  // 每 15 秒把房主還沒確認收到的點送過去；房主合併進紀錄後回傳確認（ack）
+  // =====================================================================
+  const recentRecs = new Map();
+  const TRK_CHUNK = 300;
+  let myTrk = null;
+  const trkTopic = (kind, id) => `${NS}/${encodeURIComponent(joined.room)}/${kind}-${id}`;
+  async function loadTimes(r) {
+    try { for (const p of await DB.getPoints(r.sid)) (r.times[p[1]] || (r.times[p[1]] = [])).push(p[0]); } catch {}
+    for (const k in r.times) r.times[k].sort((a, b) => a - b);
+  }
+  // 依房間的記錄狀態，開始或結束「我的軌跡」
+  function trkSync() {
+    const want = joined && roomDecided && !amHost && room && ctl.state === 'rec' && ctl.host === room.host ? ctl.sid : null;
+    if (want && (!myTrk || myTrk.sid !== want)) {
+      if (myTrk && !myTrk.endedAt) finishMyTrk();
+      myTrk = { sid: want, localSid: 'mine-' + want, room: joined.room, hostName: ctl.hostName || (room && room.hostName) || '',
+        startedAt: Date.now(), endedAt: null, pts: [], ackT: 0, buf: [], count: 0, last: 0 };
+      myTrkPoint(true);
+    } else if (!want && myTrk && !myTrk.endedAt) finishMyTrk();
+  }
+  function myTrkPoint(force) {
+    const t = myTrk;
+    if (!t || t.endedAt || me.lat == null) return;
+    const now = Date.now();
+    if (!force && now - t.last < REC_EVERY_MS) return;
+    t.last = now;
+    const p = [now, +me.lat.toFixed(6), +me.lng.toFixed(6), Math.round((me.speed || 0) * 10) / 10, me.heading == null ? null : Math.round(me.heading)];
+    t.pts.push(p); t.buf.push([p[0], myId, p[1], p[2], p[3], p[4]]); t.count++;
+  }
+  let trkFlushing = false;
+  async function myTrkFlush(t = myTrk) {
+    if (!t || trkFlushing) return;
+    trkFlushing = true;
+    const pts = t.buf; t.buf = [];
+    try {
+      if (pts.length) await DB.addChunk(t.localSid, pts);
+      if (t.count) await DB.putSession({ sid: t.localSid, kind: 'mine', room: t.room, hostName: t.hostName, startedAt: t.startedAt,
+        endedAt: t.endedAt || Date.now(), drivers: { [myId]: { name: me.name || '我', color: me.color } }, count: t.count, done: !!t.endedAt });
+    } catch (e) { t.buf = pts.concat(t.buf); }
+    trkFlushing = false;
+  }
+  function finishMyTrk() {
+    const t = myTrk; if (!t || t.endedAt) return;
+    t.endedAt = Date.now();
+    (async () => { while (trkFlushing) await sleep(20); myTrkFlush(t); })();
+    trkSend();
+  }
+  // 把房主還沒確認的點送過去（網路恢復、每 15 秒、記錄結束時）
+  function trkSend() {
+    const t = myTrk;
+    if (!t || !connected || !joined) return;
+    if (t.endedAt && Date.now() - t.endedAt > 15 * 60_000) { myTrk = null; return; }   // 房主一直沒回應：放棄（自己手機上仍有完整一份）
+    const pend = t.pts.filter(p => p[0] > t.ackT);
+    if (!pend.length) { if (t.endedAt) myTrk = null; return; }
+    for (let i = 0; i < pend.length; i += TRK_CHUNK) {
+      client.publish(trkTopic('trk', myId), JSON.stringify({ sid: t.sid, id: myId, name: me.name, now: Date.now(), pts: pend.slice(i, i + TRK_CHUNK) }), { qos: 1 });
+    }
+  }
+  setInterval(trkSend, 15_000);
+  setInterval(() => myTrkFlush(), 5000);
+  function onAck(a) {
+    if (a && myTrk && a.sid === myTrk.sid && isFinite(+a.t)) myTrk.ackT = Math.max(myTrk.ackT, +a.t);
+  }
+  // 房主：收到補傳 → 換算成本機時間、去除重複、寫進紀錄 → 回傳確認
+  async function onTrk(m) {
+    if (!amHost || !m || typeof m.id !== 'string' || m.id === myId || !Array.isArray(m.pts) || !m.sid) return;
+    let r = rec && rec.sid === m.sid ? rec : recentRecs.get(m.sid);
+    if (!r) {   // 房主重新整理過：從手機裡找回那場紀錄
+      const meta = await DB.getSession(m.sid).catch(() => null);
+      if (!meta || meta.kind) return;
+      r = { ...meta, buf: [], times: {} }; await loadTimes(r);
+      recentRecs.set(r.sid, r); setTimeout(() => recentRecs.delete(r.sid), 15 * 60_000);
+    }
+    const a = clockOff.get(m.id), off = Math.min(Date.now() - (+m.now || Date.now()), a && a.length ? Math.min(...a) : Infinity);
+    const name = String(m.name || '車手').slice(0, 20);
+    let maxT = 0, added = 0;
+    for (const p of m.pts) {
+      if (!Array.isArray(p) || p.length < 3) continue;
+      if (recAdd(r, m.id, name, colorFor(m.id), +p[0] + off, +p[1], +p[2], +p[3], p[4] == null ? null : +p[4])) added++;
+      if (+p[0] > maxT) maxT = +p[0];
+    }
+    if (r !== rec && added) await flushRec(r);   // 已結束的紀錄：直接補寫進手機
+    if (maxT && connected) client.publish(trkTopic('ack', m.id), JSON.stringify({ sid: m.sid, t: maxT }), { qos: 1 });
+  }
 
   // ---------- 儲存（IndexedDB，存在這支手機的瀏覽器裡） ----------
   const DB = (() => {
@@ -1223,11 +1342,12 @@
     list.sort((a, b) => b.startedAt - a.startedAt);
     if (!list.length) { $('sessList').innerHTML = '<p class="hint">還沒有紀錄。房主按「開始記錄」，或任何人用 🎥 錄影，都會存在這支手機上。</p>'; return; }
     $('sessList').innerHTML = list.map(s => {
-      const live = (rec && rec.sid === s.sid) || (camTrack && camTrack.sid === s.sid);
-      const isCam = s.kind === 'cam';
-      const title = isCam ? `🎥 錄影軌跡${s.room ? '　#' + esc(s.room) : ''}` : `#${esc(s.room)}`;
-      const who = isCam ? (s.video ? `影片：${esc(s.video.name)}` : '（影片沒有儲存）')
-                        : Object.values(s.drivers || {}).map(d => esc(d.name)).join('、');
+      const live = (rec && rec.sid === s.sid) || (camTrack && camTrack.sid === s.sid) || (myTrk && !myTrk.endedAt && myTrk.localSid === s.sid);
+      const isCam = s.kind === 'cam' || s.kind === 'mine';
+      const title = s.kind === 'cam' ? `🎥 錄影軌跡${s.room ? '　#' + esc(s.room) : ''}` : s.kind === 'mine' ? `🧭 我的軌跡　#${esc(s.room)}` : `#${esc(s.room)}`;
+      const who = s.kind === 'cam' ? (s.video ? `影片：${esc(s.video.name)}` : '（影片沒有儲存）')
+                : s.kind === 'mine' ? `房主 ${esc(s.hostName || '')} 記錄期間，你自己的軌跡`
+                : Object.values(s.drivers || {}).map(d => esc(d.name)).join('、');
       return `<div class="sess" data-sid="${esc(s.sid)}">
         <div class="t">${fmtDate(s.startedAt)}　${title}${live ? '　<span style="color:#ff6b6b">● 記錄中</span>' : ''}</div>
         <div class="m">${fmtDur((s.endedAt || Date.now()) - s.startedAt)} · ${isCam ? '自己' : Object.keys(s.drivers || {}).length + ' 人'} · ${s.count || 0} 筆
@@ -1250,6 +1370,7 @@
     const sid = btn.closest('.sess').dataset.sid, act = btn.dataset.act;
     if (rec && rec.sid === sid) await flushRec();
     if (camTrack && camTrack.sid === sid) await camTrackFlush();
+    if (myTrk && myTrk.localSid === sid) await myTrkFlush();
     if (act === 'del') {
       if (!confirm('確定刪除這筆紀錄？刪除後無法復原。')) return;
       await DB.deleteSession(sid); openSheet(); return;
